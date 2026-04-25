@@ -1,195 +1,243 @@
-import prisma from '../../utils/prisma.js';
-import bcrypt from 'bcryptjs';
-import { RegisterInput, LoginInput, AuthResponse } from './auth.types.js';
+import { OtpPurpose, Prisma } from '@prisma/client';
+import { env } from '../../config/env.js';
+import { prisma } from '../../prisma/client.js';
 import { ApiError } from '../../utils/ApiError.js';
-import { generateToken } from '../../utils/token.js';
-import { env } from '../../config/env';
+import { decimalToNumber } from '../../utils/geo.js';
+import { normalizePhoneNumber } from '../../utils/phone.js';
+import { buildAuthPayload, generateAccessToken } from '../../utils/token.js';
+import { createPatientFromRegistration } from '../patient/patient.service.js';
+import type { StartPhoneAuthInput, VerifyPhoneAuthInput } from './auth.types.js';
 
-// Helper to format profile image URL
-const formatProfileImage = (image: string | null) => {
-  if (!image) return null;
-  if (image.startsWith('http')) return image;
-  const cdnPrefix = env.DO_SPACES_CDN_URL.replace(/\/\/+$/, '');
-  return `${cdnPrefix}/${encodeURI(image)}`;
-};
+const authUserInclude = {
+  doctorProfile: {
+    include: {
+      location: true,
+    },
+  },
+  patientProfile: {
+    include: {
+      referredByDoctor: {
+        include: {
+          user: true,
+        },
+      },
+      primaryDoctor: {
+        include: {
+          user: true,
+        },
+      },
+      consents: {
+        where: {
+          revokedAt: null,
+        },
+        orderBy: {
+          grantedAt: 'desc',
+        },
+      },
+    },
+  },
+} satisfies Prisma.UserInclude;
 
-export const register = async (input: RegisterInput): Promise<AuthResponse> => {
-  const existingEmail = await prisma.user.findUnique({
-    where: { email: input.email },
+const mapAuthUser = (
+  user: Prisma.UserGetPayload<{ include: typeof authUserInclude }>
+) => ({
+  id: user.id,
+  fullName: user.fullName,
+  phoneNumber: user.phoneNumber,
+  role: user.role,
+  permissions: user.permissions,
+  status: user.status,
+  photoUrl: user.photoUrl,
+  doctorProfile: user.doctorProfile
+    ? {
+        id: user.doctorProfile.id,
+        referralCode: user.doctorProfile.referralCode,
+        specialty: user.doctorProfile.specialty,
+        bio: user.doctorProfile.bio,
+        languages: user.doctorProfile.languages,
+        yearsExperience: user.doctorProfile.yearsExperience,
+        serviceRadiusKm: user.doctorProfile.serviceRadiusKm,
+        isAvailable: user.doctorProfile.isAvailable,
+        workplaceName: user.doctorProfile.workplaceName,
+        workplaceAddress: user.doctorProfile.workplaceAddress,
+        location: user.doctorProfile.location
+          ? {
+              city: user.doctorProfile.location.city,
+              addressLine: user.doctorProfile.location.addressLine,
+              latitude: decimalToNumber(user.doctorProfile.location.latitude),
+              longitude: decimalToNumber(user.doctorProfile.location.longitude),
+            }
+          : null,
+      }
+    : null,
+  patientProfile: user.patientProfile
+    ? {
+        id: user.patientProfile.id,
+        availablePoints: user.patientProfile.availablePoints,
+        lifetimePoints: user.patientProfile.lifetimePoints,
+        referralCodeUsed: user.patientProfile.referralCodeUsed,
+        city: user.patientProfile.city,
+        homeAddress: user.patientProfile.homeAddress,
+        latitude: decimalToNumber(user.patientProfile.latitude),
+        longitude: decimalToNumber(user.patientProfile.longitude),
+        dateOfBirth: user.patientProfile.dateOfBirth
+          ? user.patientProfile.dateOfBirth.toISOString().slice(0, 10)
+          : null,
+        gender: user.patientProfile.gender,
+        emergencyContactName: user.patientProfile.emergencyContactName,
+        emergencyContactPhone: user.patientProfile.emergencyContactPhone,
+        allergies: user.patientProfile.allergies,
+        chronicConditions: user.patientProfile.chronicConditions,
+        currentMedications: user.patientProfile.currentMedications,
+        mobilityNotes: user.patientProfile.mobilityNotes,
+        communicationPreferences: user.patientProfile.communicationPreferences,
+        notes: user.patientProfile.notes,
+        referredDoctorName: user.patientProfile.referredByDoctor?.user.fullName ?? null,
+        primaryDoctorName: user.patientProfile.primaryDoctor?.user.fullName ?? null,
+        consents: user.patientProfile.consents.map((consent) => ({
+          id: consent.id,
+          type: consent.type,
+          version: consent.version,
+          grantedAt: consent.grantedAt,
+          revokedAt: consent.revokedAt,
+          source: consent.source,
+        })),
+      }
+    : null,
+});
+
+export const startPhoneAuth = async (input: StartPhoneAuthInput) => {
+  const phoneNumber = normalizePhoneNumber(input.phoneNumber);
+  const existingUser = await prisma.user.findUnique({
+    where: { phoneNumber },
   });
-  if (existingEmail) {
-    throw new ApiError(400, 'Email already exists');
+
+  if (existingUser && existingUser.status !== 'ACTIVE') {
+    throw new ApiError(403, 'This account is disabled');
   }
 
-  if (input.phone) {
-    const existingPhone = await prisma.user.findFirst({
-      where: { phone: input.phone },
-    });
-
-    if (existingPhone) {
-      throw new ApiError(400, 'Phone already exists');
-    }
-  }
-
-  const hashedPassword = await bcrypt.hash(input.password, 10);
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { password, ...rest } = input;
-
-  const user = await prisma.user.create({
+  await prisma.authChallenge.updateMany({
+    where: {
+      phoneNumber,
+      consumedAt: null,
+    },
     data: {
-      ...rest,
-      password: hashedPassword,
+      consumedAt: new Date(),
     },
   });
 
-  const token = generateToken(user.id, user.role);
+  const purpose = input.intent ?? (existingUser ? OtpPurpose.LOGIN : OtpPurpose.REGISTER);
+  const challenge = await prisma.authChallenge.create({
+    data: {
+      phoneNumber,
+      purpose,
+      otpCode: env.OTP_DEFAULT_CODE,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 5),
+      userId: existingUser?.id,
+      metadata: {
+        isMockOtp: true,
+      },
+    },
+  });
 
   return {
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      phone: user.phone,
-      role: user.role,
-      profileImage: formatProfileImage(user.profileImage),
-    },
-    token,
+    challengeId: challenge.id,
+    phoneNumber,
+    isExistingUser: Boolean(existingUser),
+    nextStep: existingUser ? 'VERIFY_OTP' : 'COMPLETE_REGISTRATION',
+    otpCodePreview: env.NODE_ENV === 'production' ? undefined : env.OTP_DEFAULT_CODE,
   };
 };
 
-export const login = async (input: LoginInput): Promise<AuthResponse> => {
-// ... (skip login, no change needed)
-  const user = await prisma.user.findUnique({
-    where: { email: input.email },
+export const verifyPhoneAuth = async (input: VerifyPhoneAuthInput) => {
+  const challenge = await prisma.authChallenge.findUnique({
+    where: { id: input.challengeId },
   });
 
+  if (!challenge || challenge.consumedAt) {
+    throw new ApiError(404, 'Authentication challenge is no longer active');
+  }
+
+  if (challenge.expiresAt < new Date()) {
+    throw new ApiError(400, 'Authentication code has expired');
+  }
+
+  if (challenge.otpCode !== input.otpCode) {
+    throw new ApiError(400, 'Authentication code is incorrect');
+  }
+
+  let user = challenge.userId
+    ? await prisma.user.findUnique({
+        where: { id: challenge.userId },
+        include: authUserInclude,
+      })
+    : await prisma.user.findUnique({
+        where: { phoneNumber: challenge.phoneNumber },
+        include: authUserInclude,
+      });
+
   if (!user) {
-    throw new ApiError(401, 'Invalid credentials');
+    if (!input.registration) {
+      throw new ApiError(400, 'Registration details are required for a new patient');
+    }
+
+    const created = await createPatientFromRegistration({
+      phoneNumber: challenge.phoneNumber,
+      ...input.registration,
+    });
+
+    user = await prisma.user.findUnique({
+      where: { id: created.user.id },
+      include: authUserInclude,
+    });
   }
 
-  const isValid = await bcrypt.compare(input.password, user.password);
-
-  if (!isValid) {
-    throw new ApiError(401, 'Invalid credentials');
+  if (!user) {
+    throw new ApiError(500, 'Unable to complete phone authentication');
   }
 
-  const token = generateToken(user.id, user.role);
+  if (user.status !== 'ACTIVE') {
+    throw new ApiError(403, 'This account is disabled');
+  }
+
+  await prisma.authChallenge.update({
+    where: { id: challenge.id },
+    data: {
+      consumedAt: new Date(),
+      userId: user.id,
+    },
+  });
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      lastLoginAt: new Date(),
+    },
+  });
 
   return {
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      phone: user.phone,
-      role: user.role,
-      profileImage: formatProfileImage(user.profileImage),
-    },
-    token,
+    token: generateAccessToken(
+      buildAuthPayload(
+        user.id,
+        user.phoneNumber,
+        user.role,
+        user.permissions,
+        user.status
+      )
+    ),
+    user: mapAuthUser(user),
   };
 };
 
 export const getMe = async (userId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    // Select all fields or omit sensitive
-    // Prisma returns all by default if select is missing, but here it is explicit.
-    // I should remove explicit select to return full profile or update it.
-    // Let's remove select to return full object (except password? No Prisma returns password by default).
-    // I must exclude password.
+    include: authUserInclude,
   });
 
   if (!user) {
     throw new ApiError(404, 'User not found');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { password, ...start } = user;
-  return {
-    ...start,
-    profileImage: formatProfileImage(user.profileImage),
-  };
-};
-
-export const updateProfile = async (
-  userId: string,
-  data: Partial<RegisterInput> & { password?: string }
-) => {
-  if (data.phone) {
-    const exists = await prisma.user.findFirst({
-      where: {
-        phone: data.phone,
-        id: { not: userId },
-      },
-    });
-    if (exists) {
-      throw new ApiError(400, 'Phone number already in use');
-    }
-  }
-  
-  const updateData: Record<string, any> = { ...data };
-  
-  if (data.password) {
-    updateData.password = await bcrypt.hash(data.password, 10);
-  } else {
-    delete updateData.password;
-  }
-
-  const user = await prisma.user.update({
-    where: { id: userId },
-    data: updateData,
-  });
-  
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { password, ...result } = user;
-  return {
-    ...result,
-    profileImage: formatProfileImage(user.profileImage),
-  };
-};
-
-export const changePassword = async (
-  userId: string,
-  data: { currentPassword: string; newPassword: string }
-) => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-  });
-
-  if (!user) {
-    throw new ApiError(404, 'User not found');
-  }
-
-  const isMatch = await bcrypt.compare(data.currentPassword, user.password);
-  if (!isMatch) {
-    throw new ApiError(400, 'Incorrect current password');
-  }
-
-  const hashedPassword = await bcrypt.hash(data.newPassword, 10);
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { password: hashedPassword },
-  });
-
-  return { success: true };
-};
-
-
-export const savePushToken = async (userId: string, token: string) => {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { pushToken: token },
-  });
-
-  return { success: true };
-};
-
-export const removePushToken = async (userId: string) => {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { pushToken: null },
-  });
-
-  return { success: true };
+  return mapAuthUser(user);
 };

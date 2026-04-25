@@ -1,16 +1,6 @@
-import app from './app';
+import app from './app.js';
+import { env } from './config/env.js';
 
-const PORT = 3001;
-const HOST = '0.0.0.0';
-
-app
-  .listen(PORT, HOST, () => {
-    console.log(`🚀 Server running on http://${HOST}:${PORT}`);
-    console.log(
-      `📡 Network accessible - find your IP with: ipconfig (Windows) or ifconfig (Mac/Linux)`
-    );
-  })
-  .on('error', (err: Error) => {
-    console.error('❌ Failed to start server:', err);
-    process.exit(1);
-  });
+app.listen(env.PORT, '0.0.0.0', () => {
+  console.log(`Medical backend running on http://0.0.0.0:${env.PORT}`);
+});

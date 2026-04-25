@@ -1,47 +1,78 @@
-import { Request, Response, NextFunction } from 'express';
-import { verifyToken } from '../utils/token';
-import { ApiError } from '../utils/ApiError';
+import type { NextFunction, Request, Response } from 'express';
+import { Permission, Role, UserStatus } from '@prisma/client';
+import { prisma } from '../prisma/client.js';
+import { ApiError } from '../utils/ApiError.js';
+import { hasPermission } from '../utils/permissions.js';
+import { setRequestActor } from '../utils/requestContext.js';
+import { verifyAccessToken } from '../utils/token.js';
 
-export const authenticate = (
+export const authenticate = async (
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next(new ApiError(401, 'Unauthorized - No token provided'));
+  if (!authHeader?.startsWith('Bearer ')) {
+    return next(new ApiError(401, 'Authentication token is required'));
   }
 
-  const token = authHeader.split(' ')[1];
-
   try {
-    const decoded = verifyToken(token);
-    const appHeader = (req.headers['x-app'] || req.headers['x-app-context']) as
-      | string
-      | undefined;
+    const decoded = verifyAccessToken(authHeader.replace('Bearer ', ''));
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: {
+        id: true,
+        phoneNumber: true,
+        role: true,
+        permissions: true,
+        status: true,
+      },
+    });
 
-    if (decoded.app && appHeader && decoded.app !== appHeader) {
-      return next(new ApiError(403, 'Forbidden - Wrong application context'));
+    if (!user) {
+      return next(new ApiError(401, 'Authentication token is invalid or expired'));
     }
 
-    req.user = decoded as any;
+    if (user.status !== UserStatus.ACTIVE) {
+      return next(new ApiError(403, 'This account is disabled'));
+    }
+
+    req.user = user;
+    setRequestActor({
+      userId: user.id,
+      role: user.role,
+    });
     next();
-  } catch (error) {
-    next(new ApiError(401, 'Unauthorized - Invalid token'));
+  } catch {
+    next(new ApiError(401, 'Authentication token is invalid or expired'));
   }
 };
 
-export const authorize = (roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+export const authorize =
+  (...roles: Role[]) =>
+  (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
-      return next(new ApiError(401, 'Unauthorized - User not authenticated'));
+      return next(new ApiError(401, 'Authentication is required'));
     }
 
     if (!roles.includes(req.user.role)) {
-      return next(new ApiError(403, 'Forbidden - Insufficient permissions'));
+      return next(new ApiError(403, 'You do not have permission to access this resource'));
     }
 
     next();
   };
-};
+
+export const authorizePermissions =
+  (...permissions: Permission[]) =>
+  (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return next(new ApiError(401, 'Authentication is required'));
+    }
+
+    if (!hasPermission(req.user.permissions, permissions)) {
+      return next(new ApiError(403, 'Missing required permissions'));
+    }
+
+    next();
+  };

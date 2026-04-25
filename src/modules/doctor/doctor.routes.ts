@@ -1,0 +1,33 @@
+import { Router } from 'express';
+import { Role } from '@prisma/client';
+import { authenticate, authorize } from '../../middleware/authMiddleware.js';
+import * as doctorController from './doctor.controller.js';
+
+const router = Router();
+
+router.get('/me/summary', authenticate, authorize(Role.DOCTOR), doctorController.getMySummary);
+router.patch('/me/location', authenticate, authorize(Role.DOCTOR), doctorController.updateLocation);
+router.patch('/me/profile', authenticate, authorize(Role.DOCTOR), doctorController.updateProfile);
+router.patch(
+  '/me/availability',
+  authenticate,
+  authorize(Role.DOCTOR),
+  doctorController.updateAvailability
+);
+router.post(
+  '/me/schedule/templates',
+  authenticate,
+  authorize(Role.DOCTOR),
+  doctorController.createScheduleTemplate
+);
+router.post(
+  '/me/unavailability',
+  authenticate,
+  authorize(Role.DOCTOR),
+  doctorController.createUnavailability
+);
+router.get('/', authenticate, doctorController.getDoctors);
+router.get('/:doctorId', authenticate, doctorController.getDoctor);
+router.get('/:doctorId/slots', authenticate, doctorController.getDoctorSlots);
+
+export default router;

@@ -1,32 +1,28 @@
-export class ApiResponse<T> {
-  success: boolean;
+export interface ApiSuccessResponse<T> {
+  success: true;
   message: string;
-  data: T | null;
+  data: T;
+}
 
-  constructor(dataOrSuccess: T | boolean, message: string, data?: T) {
-    // Support both patterns:
-    // new ApiResponse(data, message) - used in controllers
-    // new ApiResponse(success, message, data) - used in static methods
-    if (typeof dataOrSuccess === 'boolean') {
-      this.success = dataOrSuccess;
-      this.message = message;
-      this.data = data || null;
-    } else {
-      this.success = true;
-      this.message = message;
-      this.data = dataOrSuccess;
-    }
-  }
+export interface ApiErrorResponse {
+  success: false;
+  message: string;
+  errors?: unknown;
+}
 
-  static success<T>(message: string, data: T): ApiResponse<T> {
-    return new ApiResponse(true, message, data);
-  }
-
-  static error(message: string, errors: any[] = []): any {
+export const ApiResponse = {
+  success<T>(message: string, data: T): ApiSuccessResponse<T> {
+    return {
+      success: true,
+      message,
+      data,
+    };
+  },
+  error(message: string, errors?: unknown): ApiErrorResponse {
     return {
       success: false,
       message,
       errors,
     };
-  }
-}
+  },
+};

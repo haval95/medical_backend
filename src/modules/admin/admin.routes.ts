@@ -1,0 +1,250 @@
+import { Router } from 'express';
+import { Permission, Role } from '@prisma/client';
+import {
+  authenticate,
+  authorize,
+  authorizePermissions,
+} from '../../middleware/authMiddleware.js';
+import * as adminController from './admin.controller.js';
+
+const router = Router();
+
+router.use(authenticate, authorize(Role.ADMIN));
+
+router.get(
+  '/dashboard',
+  authorizePermissions(Permission.DASHBOARD_VIEW),
+  adminController.dashboard
+);
+router.get('/permissions', authorizePermissions(Permission.ADMIN_MANAGE), adminController.permissions);
+router.get('/users', authorizePermissions(Permission.USER_VIEW), adminController.users);
+router.post('/users', authorizePermissions(Permission.USER_CREATE), adminController.createUser);
+router.patch(
+  '/users/:userId',
+  authorizePermissions(Permission.USER_UPDATE),
+  adminController.updateUser
+);
+router.get('/requests', authorizePermissions(Permission.REQUEST_VIEW), adminController.requests);
+router.get(
+  '/requests/directory',
+  authorizePermissions(Permission.REQUEST_VIEW),
+  adminController.requestDirectory
+);
+router.get(
+  '/requests/:requestId',
+  authorizePermissions(Permission.REQUEST_VIEW),
+  adminController.requestById
+);
+router.get('/doctors', authorizePermissions(Permission.DOCTOR_VIEW), adminController.doctors);
+router.get(
+  '/doctors/directory',
+  authorizePermissions(Permission.DOCTOR_VIEW),
+  adminController.doctorDirectory
+);
+router.post(
+  '/uploads/doctor-photo',
+  authorizePermissions(Permission.DOCTOR_UPDATE),
+  adminController.uploadDoctorPhoto
+);
+router.get(
+  '/doctors/:doctorId',
+  authorizePermissions(Permission.DOCTOR_VIEW),
+  adminController.doctorById
+);
+router.patch(
+  '/doctors/:doctorId',
+  authorizePermissions(Permission.DOCTOR_UPDATE),
+  adminController.updateDoctor
+);
+router.get(
+  '/doctors/:doctorId/slots',
+  authorizePermissions(Permission.DOCTOR_VIEW),
+  adminController.doctorSlots
+);
+router.post(
+  '/doctors/:doctorId/schedule/templates',
+  authorizePermissions(Permission.DOCTOR_SCHEDULE_MANAGE),
+  adminController.createDoctorScheduleTemplate
+);
+router.post(
+  '/doctors/:doctorId/unavailability',
+  authorizePermissions(Permission.DOCTOR_SCHEDULE_MANAGE),
+  adminController.createDoctorUnavailability
+);
+router.get('/patients', authorizePermissions(Permission.PATIENT_VIEW), adminController.patients);
+router.get(
+  '/patients/directory',
+  authorizePermissions(Permission.PATIENT_VIEW),
+  adminController.patientDirectory
+);
+router.get(
+  '/patients/:patientId',
+  authorizePermissions(Permission.PATIENT_VIEW),
+  adminController.patientById
+);
+router.patch(
+  '/patients/:patientId',
+  authorizePermissions(Permission.PATIENT_UPDATE),
+  adminController.updatePatient
+);
+router.get('/referrals', authorizePermissions(Permission.REFERRAL_VIEW), adminController.referrals);
+router.get('/discounts', authorizePermissions(Permission.DISCOUNT_VIEW), adminController.discounts);
+router.post(
+  '/discounts',
+  authorizePermissions(Permission.DISCOUNT_MANAGE),
+  adminController.createDiscount
+);
+router.patch(
+  '/discounts/:discountId',
+  authorizePermissions(Permission.DISCOUNT_MANAGE),
+  adminController.updateDiscount
+);
+router.post(
+  '/points/adjust',
+  authorizePermissions(Permission.POINTS_ADJUST),
+  adminController.adjustPoints
+);
+router.get(
+  '/locations/overview',
+  authorizePermissions(Permission.LOCATION_VIEW),
+  adminController.locations
+);
+router.get(
+  '/appointments',
+  authorizePermissions(Permission.APPOINTMENT_VIEW),
+  adminController.appointments
+);
+router.get(
+  '/appointments/directory',
+  authorizePermissions(Permission.APPOINTMENT_VIEW),
+  adminController.appointmentDirectory
+);
+router.get(
+  '/appointments/:appointmentId',
+  authorizePermissions(Permission.APPOINTMENT_VIEW),
+  adminController.appointmentById
+);
+router.post(
+  '/appointments',
+  authorizePermissions(Permission.APPOINTMENT_MANAGE),
+  adminController.createAppointment
+);
+router.get('/reviews', authorizePermissions(Permission.REVIEW_VIEW), adminController.reviews);
+router.get(
+  '/reviews/directory',
+  authorizePermissions(Permission.REVIEW_VIEW),
+  adminController.reviewDirectory
+);
+router.get(
+  '/reviews/:reviewId',
+  authorizePermissions(Permission.REVIEW_VIEW),
+  adminController.reviewById
+);
+router.patch(
+  '/reviews/:reviewId/moderate',
+  authorizePermissions(Permission.REVIEW_MODERATE),
+  adminController.moderateReview
+);
+router.get('/reports', authorizePermissions(Permission.REPORT_VIEW), adminController.reports);
+router.get(
+  '/reports/table',
+  authorizePermissions(Permission.REPORT_VIEW),
+  adminController.reportTable
+);
+router.get(
+  '/compliance/overview',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.complianceOverview
+);
+router.get(
+  '/compliance/audit-logs',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.auditLogs
+);
+router.get(
+  '/compliance/retention-rules',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.retentionRules
+);
+router.post(
+  '/compliance/retention-rules',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.createRetentionRuleRecord
+);
+router.post(
+  '/compliance/retention-rules/:ruleId/run',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.runRetentionRuleRecord
+);
+router.get(
+  '/compliance/incidents',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.securityIncidents
+);
+router.post(
+  '/compliance/incidents',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.createSecurityIncidentRecord
+);
+router.patch(
+  '/compliance/incidents/:incidentId',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.updateSecurityIncidentRecord
+);
+router.get(
+  '/compliance/access-reviews',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.accessReviews
+);
+router.post(
+  '/compliance/access-reviews',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.createAccessReviewRecord
+);
+router.patch(
+  '/compliance/access-reviews/:reviewId',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.updateAccessReviewRecord
+);
+router.get(
+  '/compliance/data-requests',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.dataGovernanceRequests
+);
+router.post(
+  '/compliance/data-requests',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.createDataGovernanceRequestRecord
+);
+router.patch(
+  '/compliance/data-requests/:requestId',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.processDataGovernanceRequestRecord
+);
+router.get(
+  '/compliance/backup-operations',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.backupOperations
+);
+router.post(
+  '/compliance/backup-operations',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.createBackupOperationRecord
+);
+router.patch(
+  '/compliance/backup-operations/:operationId',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.updateBackupOperationRecord
+);
+router.get(
+  '/compliance/notification-queue',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.notificationQueue
+);
+router.post(
+  '/compliance/notification-queue/process',
+  authorizePermissions(Permission.ADMIN_MANAGE),
+  adminController.processNotificationQueueRecord
+);
+
+export default router;

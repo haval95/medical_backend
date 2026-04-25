@@ -1,10 +1,11 @@
-import { Request } from 'express';
-import { User } from '../generated/prisma';
+import type { AuthenticatedUser } from './auth.js';
 
 declare global {
   namespace Express {
-    export interface Request {
-      user?: Omit<User, 'password'>;
+    interface Request {
+      user?: AuthenticatedUser;
     }
   }
 }
+
+export {};
