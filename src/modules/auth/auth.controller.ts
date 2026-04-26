@@ -2,7 +2,12 @@ import type { Request, Response } from 'express';
 import { ApiResponse } from '../../utils/ApiResponse.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { startPhoneAuthSchema, verifyPhoneAuthSchema } from './auth.schema.js';
-import { getMe, startPhoneAuth, verifyPhoneAuth } from './auth.service.js';
+import {
+  getMe,
+  listPublicOnboardingSteps,
+  startPhoneAuth,
+  verifyPhoneAuth,
+} from './auth.service.js';
 
 export const start = asyncHandler(async (req: Request, res: Response) => {
   const payload = startPhoneAuthSchema.parse(req.body);
@@ -19,4 +24,9 @@ export const verify = asyncHandler(async (req: Request, res: Response) => {
 export const me = asyncHandler(async (req: Request, res: Response) => {
   const data = await getMe(req.user!.id);
   res.json(ApiResponse.success('Authenticated user retrieved successfully', data));
+});
+
+export const onboardingSteps = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await listPublicOnboardingSteps();
+  res.json(ApiResponse.success('Onboarding steps retrieved successfully', data));
 });

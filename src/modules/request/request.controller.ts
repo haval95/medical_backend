@@ -4,12 +4,15 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import {
   assignRequestSchema,
   createRequestSchema,
+  rejectRequestSchema,
   updateRequestStatusSchema,
 } from './request.schema.js';
 import {
+  acceptServiceRequest,
   assignDoctorToRequest,
   createServiceRequest,
   getRequestsForUser,
+  rejectServiceRequest,
   updateServiceRequestStatus,
 } from './request.service.js';
 
@@ -39,4 +42,15 @@ export const assignDoctor = asyncHandler(async (req: Request, res: Response) => 
   const payload = assignRequestSchema.parse(req.body);
   const data = await assignDoctorToRequest(req.params.requestId, payload.doctorId);
   res.json(ApiResponse.success('Doctor assigned to service request successfully', data));
+});
+
+export const accept = asyncHandler(async (req: Request, res: Response) => {
+  const data = await acceptServiceRequest(req.user!.id, req.params.requestId);
+  res.json(ApiResponse.success('Service request accepted successfully', data));
+});
+
+export const reject = asyncHandler(async (req: Request, res: Response) => {
+  const payload = rejectRequestSchema.parse(req.body);
+  const data = await rejectServiceRequest(req.user!.id, req.params.requestId, payload.reason);
+  res.json(ApiResponse.success('Service request rejected successfully', data));
 });

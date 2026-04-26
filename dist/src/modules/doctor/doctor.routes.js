@@ -9,7 +9,11 @@ router.patch('/me/profile', authenticate, authorize(Role.DOCTOR), doctorControll
 router.patch('/me/availability', authenticate, authorize(Role.DOCTOR), doctorController.updateAvailability);
 router.post('/me/schedule/templates', authenticate, authorize(Role.DOCTOR), doctorController.createScheduleTemplate);
 router.post('/me/unavailability', authenticate, authorize(Role.DOCTOR), doctorController.createUnavailability);
+router.post('/me/schedule/slots', authenticate, authorize(Role.DOCTOR), doctorController.createScheduleSlot);
+router.patch('/me/schedule/slots/:slotId', authenticate, authorize(Role.DOCTOR), doctorController.updateScheduleSlot);
+router.delete('/me/schedule/slots/:slotId', authenticate, authorize(Role.DOCTOR), doctorController.deleteScheduleSlot);
 router.get('/', authenticate, doctorController.getDoctors);
 router.get('/:doctorId', authenticate, doctorController.getDoctor);
+router.get('/:doctorId/reviews', authenticate, doctorController.getDoctorReviewList);
 router.get('/:doctorId/slots', authenticate, doctorController.getDoctorSlots);
 export default router;

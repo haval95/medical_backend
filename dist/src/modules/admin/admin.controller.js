@@ -1,7 +1,7 @@
 import { ApiResponse } from '../../utils/ApiResponse.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { adjustPointsSchema, adminDoctorDirectorySchema, adminListAppointmentsSchema, adminPatientDirectorySchema, adminRequestDirectorySchema, adminReviewDirectorySchema, adminListUsersSchema, adminReportFiltersSchema, adminReportTableSchema, auditLogListSchema, createAccessReviewSchema, createAdminUserSchema, createBackupOperationSchema, createDataGovernanceRequestSchema, createDiscountSchema, createRetentionRuleSchema, createSecurityIncidentSchema, processDataGovernanceRequestSchema, processNotificationQueueSchema, runRetentionRuleSchema, uploadAdminDoctorPhotoSchema, updateAdminDoctorSchema, updateAdminPatientSchema, updateAdminUserSchema, updateAccessReviewSchema, updateBackupOperationSchema, updateDiscountSchema, updateSecurityIncidentSchema, } from './admin.schema.js';
-import { adjustAdminPoints, createAccessReview, createAdminAppointment, createAdminDiscount, createAdminDoctorScheduleTemplate, createAdminDoctorUnavailability, createAdminManagedUser, createBackupOperation, createDataGovernanceRequest, createRetentionRule, createSecurityIncident, getAdminAppointmentById, getAdminComplianceOverview, getAdminDashboard, getAdminDoctorById, getAdminDoctorSlots, getAdminLocationOverview, getAdminNotificationQueue, getAdminPatientById, getAdminReportOverview, getAdminReportTable, getAdminRequestById, getAdminReviewById, getAdminRequests, getPermissionCatalog, listAdminAppointmentDirectory, listAdminDoctorDirectory, listAccessReviews, listAdminAppointments, listAdminDiscounts, listAdminDoctors, listAdminPatientDirectory, listAdminPatients, listAdminReferrals, listAdminRequestDirectory, listAdminReviewDirectory, listAdminReviews, listAdminUsers, listAuditLogs, listBackupOperations, listDataGovernanceRequests, moderateAdminReview, listRetentionRules, listSecurityIncidents, processAdminNotificationQueue, processDataGovernanceRequest, runRetentionRule, updateAdminDiscount, updateAdminDoctor, updateAdminManagedUser, updateAdminPatient, updateAccessReview, updateBackupOperation, updateSecurityIncident, uploadAdminDoctorPhoto, } from './admin.service.js';
+import { adjustPointsSchema, adminDoctorDirectorySchema, adminListAppointmentsSchema, adminPatientDirectorySchema, adminRequestDirectorySchema, adminReviewDirectorySchema, adminListUsersSchema, adminReportFiltersSchema, adminReportTableSchema, auditLogListSchema, createAccessReviewSchema, createOnboardingStepSchema, createAdminUserSchema, createBackupOperationSchema, createDataGovernanceRequestSchema, createDiscountSchema, createRetentionRuleSchema, createSecurityIncidentSchema, processDataGovernanceRequestSchema, processNotificationQueueSchema, runRetentionRuleSchema, updateOnboardingStepSchema, uploadAdminDoctorPhotoSchema, uploadOnboardingImageSchema, updateAdminDoctorSchema, updateAdminPatientSchema, updateAdminUserSchema, updateAccessReviewSchema, updateBackupOperationSchema, updateDiscountSchema, updateSecurityIncidentSchema, } from './admin.schema.js';
+import { adjustAdminPoints, createAccessReview, createAdminAppointment, createAdminDiscount, createAdminDoctorScheduleTemplate, createAdminDoctorUnavailability, createAdminManagedUser, createBackupOperation, createDataGovernanceRequest, createOnboardingStep, createRetentionRule, createSecurityIncident, getAdminAppointmentById, getAdminComplianceOverview, getAdminDashboard, getAdminDoctorById, getAdminDoctorSlots, getAdminLocationOverview, getAdminNotificationQueue, getAdminPatientById, getAdminReportOverview, getAdminReportTable, getAdminRequestById, getAdminReviewById, getAdminRequests, getPermissionCatalog, listAdminAppointmentDirectory, listAdminDoctorDirectory, listAccessReviews, listAdminAppointments, listAdminDiscounts, listAdminDoctors, listAdminOnboardingSteps, listAdminPatientDirectory, listAdminPatients, listAdminReferrals, listAdminRequestDirectory, listAdminReviewDirectory, listAdminReviews, listAdminUsers, listAuditLogs, listBackupOperations, listDataGovernanceRequests, moderateAdminReview, listRetentionRules, listSecurityIncidents, processAdminNotificationQueue, processDataGovernanceRequest, runRetentionRule, deleteOnboardingStep, updateAdminDiscount, updateAdminDoctor, updateAdminManagedUser, updateAdminPatient, updateAccessReview, updateBackupOperation, updateOnboardingStep, updateSecurityIncident, uploadAdminDoctorPhoto, uploadOnboardingImage, } from './admin.service.js';
 import { createDoctorUnavailabilitySchema, createScheduleTemplateSchema, } from '../doctor/doctor.schema.js';
 import { moderateReviewSchema } from '../review/review.schema.js';
 import { createAppointmentSchema } from '../appointment/appointment.schema.js';
@@ -59,6 +59,29 @@ export const uploadDoctorPhoto = asyncHandler(async (req, res) => {
     const payload = uploadAdminDoctorPhotoSchema.parse(req.body);
     const data = await uploadAdminDoctorPhoto(payload);
     res.status(201).json(ApiResponse.success('Doctor profile photo uploaded successfully', data));
+});
+export const onboardingSteps = asyncHandler(async (_req, res) => {
+    const data = await listAdminOnboardingSteps();
+    res.json(ApiResponse.success('Onboarding steps retrieved successfully', data));
+});
+export const createOnboardingStepRecord = asyncHandler(async (req, res) => {
+    const payload = createOnboardingStepSchema.parse(req.body);
+    const data = await createOnboardingStep(payload);
+    res.status(201).json(ApiResponse.success('Onboarding step created successfully', data));
+});
+export const updateOnboardingStepRecord = asyncHandler(async (req, res) => {
+    const payload = updateOnboardingStepSchema.parse(req.body);
+    const data = await updateOnboardingStep(req.params.stepId, payload);
+    res.json(ApiResponse.success('Onboarding step updated successfully', data));
+});
+export const deleteOnboardingStepRecord = asyncHandler(async (req, res) => {
+    const data = await deleteOnboardingStep(req.params.stepId);
+    res.json(ApiResponse.success('Onboarding step deleted successfully', data));
+});
+export const uploadOnboardingImageAsset = asyncHandler(async (req, res) => {
+    const payload = uploadOnboardingImageSchema.parse(req.body);
+    const data = await uploadOnboardingImage(payload);
+    res.status(201).json(ApiResponse.success('Onboarding image uploaded successfully', data));
 });
 export const doctorSlots = asyncHandler(async (req, res) => {
     const filters = adminListAppointmentsSchema.parse(req.query);

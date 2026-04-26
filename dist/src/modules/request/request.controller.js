@@ -1,7 +1,7 @@
 import { ApiResponse } from '../../utils/ApiResponse.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { assignRequestSchema, createRequestSchema, updateRequestStatusSchema, } from './request.schema.js';
-import { assignDoctorToRequest, createServiceRequest, getRequestsForUser, updateServiceRequestStatus, } from './request.service.js';
+import { assignRequestSchema, createRequestSchema, rejectRequestSchema, updateRequestStatusSchema, } from './request.schema.js';
+import { acceptServiceRequest, assignDoctorToRequest, createServiceRequest, getRequestsForUser, rejectServiceRequest, updateServiceRequestStatus, } from './request.service.js';
 export const create = asyncHandler(async (req, res) => {
     const payload = createRequestSchema.parse(req.body);
     const data = await createServiceRequest(req.user.id, payload);
@@ -20,4 +20,13 @@ export const assignDoctor = asyncHandler(async (req, res) => {
     const payload = assignRequestSchema.parse(req.body);
     const data = await assignDoctorToRequest(req.params.requestId, payload.doctorId);
     res.json(ApiResponse.success('Doctor assigned to service request successfully', data));
+});
+export const accept = asyncHandler(async (req, res) => {
+    const data = await acceptServiceRequest(req.user.id, req.params.requestId);
+    res.json(ApiResponse.success('Service request accepted successfully', data));
+});
+export const reject = asyncHandler(async (req, res) => {
+    const payload = rejectRequestSchema.parse(req.body);
+    const data = await rejectServiceRequest(req.user.id, req.params.requestId, payload.reason);
+    res.json(ApiResponse.success('Service request rejected successfully', data));
 });

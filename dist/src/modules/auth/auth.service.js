@@ -207,3 +207,18 @@ export const getMe = async (userId) => {
     }
     return mapAuthUser(user);
 };
+export const listPublicOnboardingSteps = async () => {
+    const steps = await prisma.onboardingStep.findMany({
+        where: {
+            isActive: true,
+        },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+    return steps.map((step) => ({
+        id: step.id,
+        title: step.title,
+        description: step.description,
+        imageUrl: step.imageUrl,
+        sortOrder: step.sortOrder,
+    }));
+};

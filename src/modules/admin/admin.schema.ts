@@ -49,6 +49,41 @@ const doctorCredentialSchema = z.object({
   documentUrl: z.string().trim().url().optional(),
   notes: z.string().trim().max(500).optional(),
 });
+const workingHourEntrySchema = z
+  .object({
+    day: z.enum([
+      'MONDAY',
+      'TUESDAY',
+      'WEDNESDAY',
+      'THURSDAY',
+      'FRIDAY',
+      'SATURDAY',
+      'SUNDAY',
+    ]),
+    isActive: z.boolean(),
+    startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.isActive) {
+      return;
+    }
+
+    if (!value.startTime || !value.endTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Working days must include both a start and end time.',
+      });
+      return;
+    }
+
+    if (value.startTime >= value.endTime) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Working day end time must be after the start time.',
+      });
+    }
+  });
 
 const patientConsentSchema = z.object({
   type: z.nativeEnum(ConsentType),
@@ -106,6 +141,7 @@ export const createAdminUserSchema = z.object({
       serviceRadiusKm: z.number().int().min(1).max(150).optional(),
       defaultSlotMinutes: slotLengthSchema.optional(),
       defaultBufferMinutes: bufferMinutesSchema.optional(),
+      generalWorkingHours: z.array(workingHourEntrySchema).length(7).optional(),
       isAvailable: z.boolean().optional(),
       onboardingPoints: z.number().int().min(0).max(5000).optional(),
       workplaceName: z.string().trim().max(120).optional(),
@@ -160,6 +196,7 @@ export const updateAdminDoctorSchema = z.object({
   serviceRadiusKm: z.number().int().min(1).max(150).optional(),
   defaultSlotMinutes: slotLengthSchema.optional(),
   defaultBufferMinutes: bufferMinutesSchema.optional(),
+  generalWorkingHours: z.array(workingHourEntrySchema).length(7).optional(),
   isAvailable: z.boolean().optional(),
   workplaceName: z.string().trim().max(120).nullable().optional(),
   workplaceAddress: z.string().trim().max(240).nullable().optional(),
@@ -178,6 +215,22 @@ export const updateAdminDoctorSchema = z.object({
 });
 
 export const uploadAdminDoctorPhotoSchema = z.object({
+  fileName: z.string().trim().min(1).max(160),
+  mimeType: z.string().trim().min(3).max(120),
+  contentBase64: z.string().trim().min(20),
+});
+
+export const createOnboardingStepSchema = z.object({
+  title: z.string().trim().min(2).max(120),
+  description: z.string().trim().min(8).max(400),
+  imageUrl: z.string().trim().url(),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const updateOnboardingStepSchema = createOnboardingStepSchema.partial();
+
+export const uploadOnboardingImageSchema = z.object({
   fileName: z.string().trim().min(1).max(160),
   mimeType: z.string().trim().min(3).max(120),
   contentBase64: z.string().trim().min(20),

@@ -47,3 +47,21 @@ export const updatePatientProfileSchema = z.object({
     notes: z.string().trim().max(1200).optional(),
     consents: z.array(patientConsentInputSchema).max(12).optional(),
 });
+export const patientAddressSchema = z.object({
+    label: z.string().trim().min(2).max(60),
+    fullAddress: z.string().trim().min(4).max(240),
+    city: z.string().trim().min(2).max(80),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+    phoneNumber: z.string().trim().min(8).max(20),
+    notes: z.string().trim().max(500).optional(),
+    isDefault: z.boolean().optional(),
+});
+export const updatePatientAddressSchema = patientAddressSchema.partial().superRefine((value, ctx) => {
+    if (!Object.keys(value).length) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'At least one address field must be provided',
+        });
+    }
+});

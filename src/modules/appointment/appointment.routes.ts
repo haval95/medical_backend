@@ -16,8 +16,13 @@ router.patch(
 );
 router.post(
   '/:appointmentId/cancellation-request',
-  authorize(Role.DOCTOR),
+  authorize(Role.PATIENT, Role.DOCTOR),
   appointmentController.requestCancellation
+);
+router.post(
+  '/:appointmentId/reschedule',
+  authorize(Role.PATIENT, Role.ADMIN),
+  appointmentController.reschedule
 );
 router.post(
   '/:appointmentId/cancellation-review',

@@ -40,3 +40,6 @@ export const updateRequestStatusSchema = z.object({
 export const assignRequestSchema = z.object({
     doctorId: z.string().trim().min(10),
 });
+export const rejectRequestSchema = z.object({
+    reason: z.string().trim().min(3).max(500).optional(),
+});

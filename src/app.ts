@@ -17,9 +17,11 @@ import adminRoutes from './modules/admin/admin.routes.js';
 import appointmentRoutes from './modules/appointment/appointment.routes.js';
 import reviewRoutes from './modules/review/review.routes.js';
 import notificationRoutes from './modules/notification/notification.routes.js';
+import { env } from './config/env.js';
 import { runWithRequestContext } from './utils/requestContext.js';
 
 const app = express();
+const requestBodyLimit = `${env.REQUEST_BODY_LIMIT_MB}mb`;
 
 app.use(
   helmet({
@@ -36,8 +38,8 @@ app.use((req, _res, next) => {
     next
   );
 });
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 
 app.get('/health', (_req, res) => {
   res.json(ApiResponse.success('Medical backend is healthy', { ok: true }));

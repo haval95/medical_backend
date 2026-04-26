@@ -166,7 +166,7 @@ const getAdminRecipients = async () => prisma.user.findMany({
     },
     select: { id: true },
 });
-const releaseAppointmentSlots = async (tx, appointmentId, slotId) => {
+export const releaseAppointmentSlots = async (tx, appointmentId, slotId) => {
     if (!slotId) {
         return;
     }
@@ -237,6 +237,61 @@ const reserveAdjacentTravelBuffers = async (tx, doctorId, startsAt, endsAt, appo
         }),
     ]);
 };
+const resolveAppointmentWindow = async (doctorId, input) => {
+    if (input.slotId) {
+        const slot = await prisma.doctorScheduleSlot.findUnique({
+            where: { id: input.slotId },
+        });
+        if (!slot || slot.doctorId !== doctorId) {
+            throw new ApiError(404, 'Schedule slot not found');
+        }
+        if (slot.status !== ScheduleSlotStatus.AVAILABLE) {
+            throw new ApiError(400, 'This schedule slot is no longer available');
+        }
+        return {
+            slot,
+            startsAt: slot.startsAt,
+            endsAt: slot.endsAt,
+            slotDurationMinutes: Math.max(1, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / (60 * 1000))),
+        };
+    }
+    if (!input.startsAt || !input.endsAt) {
+        throw new ApiError(400, 'Manual appointment time is required');
+    }
+    const startsAt = new Date(input.startsAt);
+    const endsAt = new Date(input.endsAt);
+    if (startsAt >= endsAt) {
+        throw new ApiError(400, 'Appointment end time must be after the start time');
+    }
+    const overlappingAppointment = await prisma.appointment.findFirst({
+        where: {
+            doctorId,
+            status: {
+                in: [
+                    AppointmentStatus.PENDING,
+                    AppointmentStatus.CONFIRMED,
+                    AppointmentStatus.IN_PROGRESS,
+                    AppointmentStatus.CANCELLATION_REQUESTED,
+                ],
+            },
+            startsAt: {
+                lt: endsAt,
+            },
+            endsAt: {
+                gt: startsAt,
+            },
+        },
+    });
+    if (overlappingAppointment) {
+        throw new ApiError(400, 'This time overlaps another active appointment');
+    }
+    return {
+        slot: null,
+        startsAt,
+        endsAt,
+        slotDurationMinutes: Math.max(1, Math.round((endsAt.getTime() - startsAt.getTime()) / (60 * 1000))),
+    };
+};
 export const createAppointment = async (actor, input) => {
     const patientProfile = actor.role === Role.ADMIN && input.patientProfileId
         ? await prisma.patientProfile.findUnique({
@@ -250,29 +305,25 @@ export const createAppointment = async (actor, input) => {
     if (!patientProfile) {
         throw new ApiError(404, 'Patient profile not found');
     }
-    const [doctor, slot] = await Promise.all([
-        prisma.doctorProfile.findUnique({
-            where: { id: input.doctorId },
-            include: {
-                user: true,
-            },
-        }),
-        prisma.doctorScheduleSlot.findUnique({
-            where: { id: input.slotId },
-        }),
-    ]);
+    const doctor = await prisma.doctorProfile.findUnique({
+        where: { id: input.doctorId },
+        include: {
+            user: true,
+        },
+    });
     if (!doctor || doctor.user.status !== UserStatus.ACTIVE) {
         throw new ApiError(404, 'Doctor profile not found');
     }
-    if (!slot || slot.doctorId !== doctor.id) {
-        throw new ApiError(404, 'Schedule slot not found');
+    if (actor.role === Role.PATIENT && !input.slotId) {
+        throw new ApiError(403, 'Patients must book through an available schedule slot');
     }
-    if (slot.status !== ScheduleSlotStatus.AVAILABLE) {
-        throw new ApiError(400, 'This schedule slot is no longer available');
-    }
-    const slotDurationMinutes = Math.max(1, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / (60 * 1000)));
+    const resolvedWindow = await resolveAppointmentWindow(doctor.id, {
+        slotId: input.slotId,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+    });
     const configuredBufferMinutes = doctor.defaultBufferMinutes ?? 0;
-    const bufferMinutes = Math.max(configuredBufferMinutes, slotDurationMinutes);
+    const bufferMinutes = Math.max(configuredBufferMinutes, resolvedWindow.slotDurationMinutes);
     const appointment = await prisma.$transaction(async (tx) => {
         let serviceRequestId = input.serviceRequestId;
         if (serviceRequestId) {
@@ -287,8 +338,8 @@ export const createAppointment = async (actor, input) => {
                 data: {
                     requestedDoctorId: doctor.id,
                     assignedDoctorId: doctor.id,
-                    status: ServiceRequestStatus.ACCEPTED,
-                    scheduledFor: slot.startsAt,
+                    status: ServiceRequestStatus.ASSIGNED,
+                    scheduledFor: resolvedWindow.startsAt,
                     serviceAddress: input.patientAddress,
                     city: input.city,
                     latitude: toDecimalInput(input.latitude),
@@ -304,12 +355,12 @@ export const createAppointment = async (actor, input) => {
                     requestedDoctorId: doctor.id,
                     assignedDoctorId: doctor.id,
                     type: ServiceRequestType.SPECIFIC_DOCTOR,
-                    status: ServiceRequestStatus.ACCEPTED,
+                    status: ServiceRequestStatus.ASSIGNED,
                     serviceAddress: input.patientAddress,
                     city: input.city,
                     latitude: toDecimalInput(input.latitude),
                     longitude: toDecimalInput(input.longitude),
-                    scheduledFor: slot.startsAt,
+                    scheduledFor: resolvedWindow.startsAt,
                     notes: input.notes,
                     issueDescription: input.notes,
                     isWithinDoctorRange: true,
@@ -322,28 +373,30 @@ export const createAppointment = async (actor, input) => {
                 serviceRequestId,
                 patientProfileId: patientProfile.id,
                 doctorId: doctor.id,
-                slotId: slot.id,
-                status: AppointmentStatus.CONFIRMED,
-                startsAt: slot.startsAt,
-                endsAt: slot.endsAt,
+                slotId: resolvedWindow.slot?.id,
+                status: AppointmentStatus.PENDING,
+                startsAt: resolvedWindow.startsAt,
+                endsAt: resolvedWindow.endsAt,
                 patientAddress: input.patientAddress,
                 city: input.city,
                 latitude: toDecimalInput(input.latitude),
                 longitude: toDecimalInput(input.longitude),
                 notes: input.notes,
                 createdByRole: input.createdByRole ?? actor.role,
-                slotDurationMinutes,
+                slotDurationMinutes: resolvedWindow.slotDurationMinutes,
                 bufferMinutes,
             },
             include: appointmentInclude,
         });
-        await tx.doctorScheduleSlot.update({
-            where: { id: slot.id },
-            data: {
-                status: ScheduleSlotStatus.BOOKED,
-            },
-        });
-        await reserveAdjacentTravelBuffers(tx, doctor.id, slot.startsAt, slot.endsAt, createdAppointment.id, bufferMinutes);
+        if (resolvedWindow.slot) {
+            await tx.doctorScheduleSlot.update({
+                where: { id: resolvedWindow.slot.id },
+                data: {
+                    status: ScheduleSlotStatus.BOOKED,
+                },
+            });
+        }
+        await reserveAdjacentTravelBuffers(tx, doctor.id, resolvedWindow.startsAt, resolvedWindow.endsAt, createdAppointment.id, bufferMinutes);
         await tx.patientProfile.update({
             where: { id: patientProfile.id },
             data: {
@@ -359,24 +412,24 @@ export const createAppointment = async (actor, input) => {
     await createNotifications([
         {
             userId: doctor.userId,
-            type: NotificationType.APPOINTMENT_CONFIRMED,
-            title: 'New booked appointment',
-            body: `${patientProfile.user.fullName} booked ${slot.startsAt.toLocaleString()}.`,
-            data: { appointmentId: appointment.id },
+            type: NotificationType.REQUEST_ASSIGNED,
+            title: 'New booking to confirm',
+            body: `${patientProfile.user.fullName} requested ${resolvedWindow.startsAt.toLocaleString()}. Confirm or reject it from Requests.`,
+            data: { appointmentId: appointment.id, requestId: appointment.serviceRequestId ?? undefined },
         },
         {
             userId: patientProfile.userId,
-            type: NotificationType.APPOINTMENT_CONFIRMED,
-            title: 'Appointment confirmed',
-            body: `Your visit with ${doctor.user.fullName} is confirmed.`,
-            data: { appointmentId: appointment.id },
+            type: NotificationType.GENERAL,
+            title: 'Booking pending confirmation',
+            body: `Your visit with ${doctor.user.fullName} is waiting for doctor confirmation.`,
+            data: { appointmentId: appointment.id, requestId: appointment.serviceRequestId ?? undefined },
         },
         ...admins.map((admin) => ({
             userId: admin.id,
             type: NotificationType.ADMIN_ALERT,
-            title: 'Appointment booked',
-            body: `${patientProfile.user.fullName} booked ${doctor.user.fullName}.`,
-            data: { appointmentId: appointment.id },
+            title: 'Pending booking created',
+            body: `${patientProfile.user.fullName} booked ${doctor.user.fullName} and is awaiting doctor confirmation.`,
+            data: { appointmentId: appointment.id, requestId: appointment.serviceRequestId ?? undefined },
         })),
     ]);
     return mapAppointment(appointment);
@@ -458,37 +511,158 @@ export const updateAppointmentStatus = async (actor, appointmentId, status) => {
     });
     return mapAppointment(updated);
 };
-export const requestAppointmentCancellation = async (userId, appointmentId, reason) => {
-    const doctor = await prisma.doctorProfile.findUnique({
-        where: { userId },
-    });
-    if (!doctor) {
-        throw new ApiError(404, 'Doctor profile not found');
-    }
+export const requestAppointmentCancellation = async (actor, appointmentId, reason) => {
     const appointment = await prisma.appointment.findUnique({
         where: { id: appointmentId },
         include: appointmentInclude,
     });
-    if (!appointment || appointment.doctorId !== doctor.id) {
+    if (!appointment) {
         throw new ApiError(404, 'Appointment not found');
+    }
+    if (actor.role === Role.DOCTOR) {
+        const doctor = await prisma.doctorProfile.findUnique({
+            where: { userId: actor.userId },
+        });
+        if (!doctor || appointment.doctorId !== doctor.id) {
+            throw new ApiError(404, 'Appointment not found');
+        }
+    }
+    if (actor.role === Role.PATIENT) {
+        const patient = await prisma.patientProfile.findUnique({
+            where: { userId: actor.userId },
+        });
+        if (!patient || appointment.patientProfileId !== patient.id) {
+            throw new ApiError(404, 'Appointment not found');
+        }
     }
     const updated = await prisma.appointment.update({
         where: { id: appointmentId },
         data: {
             status: AppointmentStatus.CANCELLATION_REQUESTED,
-            cancellationRequestedByRole: Role.DOCTOR,
+            cancellationRequestedByRole: actor.role,
             cancellationReason: reason,
         },
         include: appointmentInclude,
     });
     const admins = await getAdminRecipients();
+    const requesterName = actor.role === Role.DOCTOR ? updated.doctor.user.fullName : updated.patientProfile.user.fullName;
+    const requesterLabel = actor.role === Role.DOCTOR ? 'Doctor' : 'Patient';
     await createNotifications(admins.map((admin) => ({
         userId: admin.id,
         type: NotificationType.ADMIN_ALERT,
-        title: 'Doctor requested cancellation',
-        body: `${updated.doctor.user.fullName} requested cancellation approval.`,
+        title: `${requesterLabel} requested cancellation`,
+        body: `${requesterName} requested cancellation approval.`,
         data: { appointmentId: updated.id },
     })));
+    return mapAppointment(updated);
+};
+export const rescheduleAppointment = async (actor, appointmentId, input) => {
+    const appointment = await prisma.appointment.findUnique({
+        where: { id: appointmentId },
+        include: appointmentInclude,
+    });
+    if (!appointment) {
+        throw new ApiError(404, 'Appointment not found');
+    }
+    if (actor.role === Role.PATIENT) {
+        const patient = await prisma.patientProfile.findUnique({
+            where: { userId: actor.userId },
+        });
+        if (!patient || appointment.patientProfileId !== patient.id) {
+            throw new ApiError(404, 'Appointment not found');
+        }
+    }
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+        throw new ApiError(400, 'Completed appointments cannot be rescheduled');
+    }
+    if (actor.role === Role.PATIENT && !input.slotId) {
+        throw new ApiError(403, 'Patients must reschedule through an available schedule slot');
+    }
+    const resolvedWindow = await resolveAppointmentWindow(appointment.doctorId, {
+        slotId: input.slotId,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+    });
+    const updated = await prisma.$transaction(async (tx) => {
+        await releaseAppointmentSlots(tx, appointment.id, appointment.slotId);
+        if (resolvedWindow.slot) {
+            await tx.doctorScheduleSlot.update({
+                where: { id: resolvedWindow.slot.id },
+                data: {
+                    status: ScheduleSlotStatus.BOOKED,
+                },
+            });
+        }
+        await reserveAdjacentTravelBuffers(tx, appointment.doctorId, resolvedWindow.startsAt, resolvedWindow.endsAt, appointment.id, appointment.bufferMinutes);
+        if (appointment.serviceRequestId) {
+            await tx.serviceRequest.update({
+                where: { id: appointment.serviceRequestId },
+                data: {
+                    scheduledFor: resolvedWindow.startsAt,
+                    serviceAddress: input.patientAddress ?? appointment.patientAddress,
+                    city: input.city ?? appointment.city,
+                    latitude: input.latitude === undefined
+                        ? appointment.latitude
+                        : toDecimalInput(input.latitude),
+                    longitude: input.longitude === undefined
+                        ? appointment.longitude
+                        : toDecimalInput(input.longitude),
+                    notes: input.notes ?? appointment.notes,
+                },
+            });
+        }
+        const next = await tx.appointment.update({
+            where: { id: appointment.id },
+            data: {
+                slotId: resolvedWindow.slot?.id ?? null,
+                startsAt: resolvedWindow.startsAt,
+                endsAt: resolvedWindow.endsAt,
+                patientAddress: input.patientAddress ?? appointment.patientAddress,
+                city: input.city ?? appointment.city,
+                latitude: input.latitude === undefined ? appointment.latitude : toDecimalInput(input.latitude),
+                longitude: input.longitude === undefined ? appointment.longitude : toDecimalInput(input.longitude),
+                notes: input.notes ?? appointment.notes,
+                status: AppointmentStatus.PENDING,
+            },
+            include: appointmentInclude,
+        });
+        if (appointment.serviceRequestId) {
+            await tx.serviceRequest.update({
+                where: { id: appointment.serviceRequestId },
+                data: {
+                    status: ServiceRequestStatus.ASSIGNED,
+                    assignedDoctorId: appointment.doctorId,
+                    scheduledFor: resolvedWindow.startsAt,
+                    serviceAddress: input.patientAddress ?? appointment.patientAddress,
+                    city: input.city ?? appointment.city,
+                    latitude: input.latitude === undefined
+                        ? appointment.latitude
+                        : toDecimalInput(input.latitude),
+                    longitude: input.longitude === undefined
+                        ? appointment.longitude
+                        : toDecimalInput(input.longitude),
+                    notes: input.notes ?? appointment.notes,
+                },
+            });
+        }
+        return next;
+    });
+    await createNotifications([
+        {
+            userId: updated.doctor.userId,
+            type: NotificationType.REQUEST_ASSIGNED,
+            title: 'Rescheduled booking to confirm',
+            body: `${updated.patientProfile.user.fullName} moved the visit to ${updated.startsAt.toLocaleString()}. Confirm or reject it from Requests.`,
+            data: { appointmentId: updated.id, requestId: updated.serviceRequestId ?? undefined },
+        },
+        {
+            userId: updated.patientProfile.userId,
+            type: NotificationType.GENERAL,
+            title: 'Booking update pending confirmation',
+            body: `Your updated visit with ${updated.doctor.user.fullName} is waiting for doctor confirmation.`,
+            data: { appointmentId: updated.id, requestId: updated.serviceRequestId ?? undefined },
+        },
+    ]);
     return mapAppointment(updated);
 };
 export const reviewAppointmentCancellation = async (adminUserId, appointmentId, input) => {
@@ -571,6 +745,9 @@ export const completeAppointment = async (userId, appointmentId, input) => {
     });
     if (!appointment || appointment.doctorId !== doctor.id) {
         throw new ApiError(404, 'Appointment not found');
+    }
+    if (appointment.status === AppointmentStatus.COMPLETED) {
+        throw new ApiError(400, 'Completed appointment records are locked');
     }
     const visitSummary = buildVisitSummary(input.visitSummary, input.visitDetails);
     const visitDetailData = buildVisitDetailWriteInput(input.visitDetails);

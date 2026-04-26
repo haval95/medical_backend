@@ -134,6 +134,80 @@ const parseDateOnly = (value?: string) =>
 const formatDateOnly = (value?: Date | null) =>
   value ? value.toISOString().slice(0, 10) : null;
 
+const workingHourDays = [
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+  'SUNDAY',
+] as const;
+
+type WorkingHourDay = (typeof workingHourDays)[number];
+
+type GeneralWorkingHour = {
+  day: WorkingHourDay;
+  isActive: boolean;
+  startTime?: string;
+  endTime?: string;
+};
+
+const timePattern = /^\d{2}:\d{2}$/;
+
+const normalizeGeneralWorkingHours = (
+  value: Prisma.JsonValue | null | undefined
+): GeneralWorkingHour[] => {
+  const defaults = new Map<WorkingHourDay, GeneralWorkingHour>(
+    workingHourDays.map((day) => [day, { day, isActive: false }])
+  );
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        continue;
+      }
+
+      const candidate = entry as Record<string, unknown>;
+      const day = candidate.day;
+      if (typeof day !== 'string' || !workingHourDays.includes(day as WorkingHourDay)) {
+        continue;
+      }
+
+      const startTime =
+        typeof candidate.startTime === 'string' && timePattern.test(candidate.startTime)
+          ? candidate.startTime
+          : undefined;
+      const endTime =
+        typeof candidate.endTime === 'string' && timePattern.test(candidate.endTime)
+          ? candidate.endTime
+          : undefined;
+      const isActive = Boolean(candidate.isActive) && Boolean(startTime && endTime);
+
+      defaults.set(day as WorkingHourDay, {
+        day: day as WorkingHourDay,
+        isActive,
+        startTime: isActive ? startTime : undefined,
+        endTime: isActive ? endTime : undefined,
+      });
+    }
+  }
+
+  return workingHourDays.map((day) => defaults.get(day)!);
+};
+
+const serializeGeneralWorkingHours = (
+  value?: GeneralWorkingHour[]
+): Prisma.InputJsonValue | undefined =>
+  value
+    ? value.map((entry) => ({
+        day: entry.day,
+        isActive: entry.isActive,
+        startTime: entry.isActive ? entry.startTime ?? null : null,
+        endTime: entry.isActive ? entry.endTime ?? null : null,
+      }))
+    : undefined;
+
 const serializeConsent = (
   consent: Prisma.PatientConsentGetPayload<Record<string, never>>
 ) => ({
@@ -198,6 +272,9 @@ const mapAdminDoctor = (
   averageRating: decimalToNumber(doctor.averageRating) ?? 0,
   reviewCount: doctor.reviewCount,
   completedVisitCount: doctor.completedVisitCount,
+  generalWorkingHours: normalizeGeneralWorkingHours(
+    doctor.generalWorkingHours as Prisma.JsonValue | null | undefined
+  ),
   _count: {
     appointments: doctor._count.appointments,
   },
@@ -318,6 +395,56 @@ const mapAdminRequest = (
       }
     : null,
 });
+
+const mapOnboardingStep = (
+  step: Prisma.OnboardingStepGetPayload<Record<string, never>>
+) => ({
+  id: step.id,
+  title: step.title,
+  description: step.description,
+  imageUrl: step.imageUrl,
+  sortOrder: step.sortOrder,
+  isActive: step.isActive,
+  createdAt: step.createdAt.toISOString(),
+  updatedAt: step.updatedAt.toISOString(),
+});
+
+const uploadManagedImage = async (
+  input: {
+    fileName: string;
+    mimeType: string;
+    contentBase64: string;
+  },
+  options: {
+    folder: string;
+    label: string;
+  }
+) => {
+  if (!input.mimeType.startsWith('image/')) {
+    throw new ApiError(400, `Only image uploads are allowed for ${options.label}`);
+  }
+
+  const fileBuffer = Buffer.from(input.contentBase64, 'base64');
+
+  if (!fileBuffer.length) {
+    throw new ApiError(400, 'Uploaded image content is empty');
+  }
+
+  if (fileBuffer.length > 5 * 1024 * 1024) {
+    throw new ApiError(400, `${options.label} must be 5 MB or smaller`);
+  }
+
+  const fileExtension = input.fileName.includes('.')
+    ? input.fileName.split('.').pop()
+    : undefined;
+
+  return uploadFileToSpaces({
+    file: fileBuffer,
+    folder: options.folder,
+    fileExtension,
+    mimeType: input.mimeType,
+  });
+};
 
 const syncPatientConsents = async (
   tx: PrismaExecutor,
@@ -444,6 +571,9 @@ const mapAdminUser = (
         averageRating: decimalToNumber(user.doctorProfile.averageRating) ?? 0,
         reviewCount: user.doctorProfile.reviewCount,
         completedVisitCount: user.doctorProfile.completedVisitCount,
+        generalWorkingHours: normalizeGeneralWorkingHours(
+          user.doctorProfile.generalWorkingHours as Prisma.JsonValue | null | undefined
+        ),
         location: user.doctorProfile.location
           ? {
               city: user.doctorProfile.location.city,
@@ -697,6 +827,7 @@ export const createAdminManagedUser = async (input: {
     serviceRadiusKm?: number;
     defaultSlotMinutes?: number;
     defaultBufferMinutes?: number;
+    generalWorkingHours?: GeneralWorkingHour[];
     isAvailable?: boolean;
     onboardingPoints?: number;
     workplaceName?: string;
@@ -795,6 +926,9 @@ export const createAdminManagedUser = async (input: {
                   yearsExperience: input.doctorProfile.yearsExperience ?? 0,
                   languages: input.doctorProfile.languages ?? [],
                   serviceRadiusKm: input.doctorProfile.serviceRadiusKm ?? 15,
+                  generalWorkingHours: serializeGeneralWorkingHours(
+                    input.doctorProfile.generalWorkingHours
+                  ),
                   isAvailable: input.doctorProfile.isAvailable ?? true,
                   onboardingPoints: input.doctorProfile.onboardingPoints ?? 100,
                   workplaceName: input.doctorProfile.workplaceName,
@@ -1054,6 +1188,7 @@ export const updateAdminDoctor = async (
     workplaceAddress?: string | null;
     workplaceLatitude?: number | null;
     workplaceLongitude?: number | null;
+    generalWorkingHours?: GeneralWorkingHour[];
     credentials?: Array<{
       type: 'DEGREE' | 'CERTIFICATE' | 'LICENSE' | 'OTHER';
       title: string;
@@ -1084,32 +1219,107 @@ export const uploadAdminDoctorPhoto = async (input: {
   fileName: string;
   mimeType: string;
   contentBase64: string;
-}) => {
-  if (!input.mimeType.startsWith('image/')) {
-    throw new ApiError(400, 'Only image uploads are allowed for doctor profile photos');
-  }
-
-  const fileBuffer = Buffer.from(input.contentBase64, 'base64');
-
-  if (!fileBuffer.length) {
-    throw new ApiError(400, 'Uploaded image content is empty');
-  }
-
-  if (fileBuffer.length > 5 * 1024 * 1024) {
-    throw new ApiError(400, 'Doctor profile photos must be 5 MB or smaller');
-  }
-
-  const fileExtension = input.fileName.includes('.')
-    ? input.fileName.split('.').pop()
-    : undefined;
-
-  return uploadFileToSpaces({
-    file: fileBuffer,
+}) =>
+  uploadManagedImage(input, {
     folder: 'doctors/profile-photos',
-    fileExtension,
-    mimeType: input.mimeType,
+    label: 'doctor profile photos',
   });
+
+export const listAdminOnboardingSteps = async () => {
+  const steps = await prisma.onboardingStep.findMany({
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  return steps.map(mapOnboardingStep);
 };
+
+export const createOnboardingStep = async (input: {
+  title: string;
+  description: string;
+  imageUrl: string;
+  sortOrder?: number;
+  isActive?: boolean;
+}) => {
+  const step = await prisma.onboardingStep.create({
+    data: {
+      title: input.title,
+      description: input.description,
+      imageUrl: input.imageUrl,
+      sortOrder: input.sortOrder ?? 0,
+      isActive: input.isActive ?? true,
+    },
+  });
+
+  return mapOnboardingStep(step);
+};
+
+export const updateOnboardingStep = async (
+  stepId: string,
+  input: {
+    title?: string;
+    description?: string;
+    imageUrl?: string;
+    sortOrder?: number;
+    isActive?: boolean;
+  }
+) => {
+  const existing = await prisma.onboardingStep.findUnique({
+    where: {
+      id: stepId,
+    },
+  });
+
+  if (!existing) {
+    throw new ApiError(404, 'Onboarding step not found');
+  }
+
+  const step = await prisma.onboardingStep.update({
+    where: {
+      id: stepId,
+    },
+    data: {
+      title: input.title,
+      description: input.description,
+      imageUrl: input.imageUrl,
+      sortOrder: input.sortOrder,
+      isActive: input.isActive,
+    },
+  });
+
+  return mapOnboardingStep(step);
+};
+
+export const deleteOnboardingStep = async (stepId: string) => {
+  const existing = await prisma.onboardingStep.findUnique({
+    where: {
+      id: stepId,
+    },
+  });
+
+  if (!existing) {
+    throw new ApiError(404, 'Onboarding step not found');
+  }
+
+  await prisma.onboardingStep.delete({
+    where: {
+      id: stepId,
+    },
+  });
+
+  return {
+    id: stepId,
+  };
+};
+
+export const uploadOnboardingImage = async (input: {
+  fileName: string;
+  mimeType: string;
+  contentBase64: string;
+}) =>
+  uploadManagedImage(input, {
+    folder: 'content/onboarding',
+    label: 'onboarding images',
+  });
 
 export const listAdminPatients = async () => {
   const patients = await prisma.patientProfile.findMany({
@@ -1561,7 +1771,9 @@ export const createAdminAppointment = async (
   input: {
     doctorId: string;
     patientProfileId?: string;
-    slotId: string;
+    slotId?: string;
+    startsAt?: string;
+    endsAt?: string;
     serviceRequestId?: string;
     patientAddress: string;
     city: string;

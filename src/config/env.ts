@@ -20,6 +20,7 @@ dotenv.config(envPath ? { path: envPath } : undefined);
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(3001),
+  REQUEST_BODY_LIMIT_MB: z.coerce.number().int().min(1).max(50).default(10),
   JWT_SECRET: z.string().min(10),
   OTP_DEFAULT_CODE: z.string().length(6).default('123456'),
   DO_SPACES_ENDPOINT: z.string().url().default('https://sfo3.digitaloceanspaces.com'),

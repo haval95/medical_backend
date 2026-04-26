@@ -19,5 +19,19 @@ router.get(
   patientController.getMyDiscountSummary
 );
 router.patch('/me/profile', authenticate, authorize(Role.PATIENT), patientController.updateProfile);
+router.get('/me/addresses', authenticate, authorize(Role.PATIENT), patientController.listAddresses);
+router.post('/me/addresses', authenticate, authorize(Role.PATIENT), patientController.createAddress);
+router.patch(
+  '/me/addresses/:addressId',
+  authenticate,
+  authorize(Role.PATIENT),
+  patientController.updateAddress
+);
+router.delete(
+  '/me/addresses/:addressId',
+  authenticate,
+  authorize(Role.PATIENT),
+  patientController.deleteAddress
+);
 
 export default router;

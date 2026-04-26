@@ -1,12 +1,15 @@
 import {
+  AppointmentStatus,
   NotificationType,
   Prisma,
   Role,
+  ScheduleSlotStatus,
   ServiceRequestStatus,
   ServiceRequestType,
   UserStatus,
 } from '@prisma/client';
 import { prisma } from '../../prisma/client.js';
+import type { PrismaExecutor } from '../../prisma/client.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { calculateDistanceKm, decimalToNumber, isWithinRadiusKm, toDecimalInput } from '../../utils/geo.js';
 import { createNotifications, type NotificationInput } from '../../utils/notifications.js';
@@ -89,6 +92,38 @@ const selectAdminRecipients = async () =>
       id: true,
     },
   });
+
+const releaseRejectedAppointmentAllocation = async (
+  tx: PrismaExecutor,
+  appointmentId: string,
+  slotId?: string | null
+) => {
+  if (!slotId) {
+    return;
+  }
+
+  await tx.doctorScheduleSlot.update({
+    where: { id: slotId },
+    data: {
+      status: ScheduleSlotStatus.AVAILABLE,
+      blockedReason: null,
+      isBuffer: false,
+      bufferForAppointmentId: null,
+    },
+  });
+
+  await tx.doctorScheduleSlot.updateMany({
+    where: {
+      bufferForAppointmentId: appointmentId,
+    },
+    data: {
+      status: ScheduleSlotStatus.AVAILABLE,
+      blockedReason: null,
+      isBuffer: false,
+      bufferForAppointmentId: null,
+    },
+  });
+};
 
 const getAvailableDoctorMatch = async (input: {
   city: string;
@@ -369,6 +404,156 @@ export const updateServiceRequestStatus = async (
   return mapRequest(updated);
 };
 
+export const acceptServiceRequest = async (userId: string, requestId: string) => {
+  const doctorProfile = await prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctorProfile) {
+    throw new ApiError(404, 'Doctor profile not found');
+  }
+
+  const request = await prisma.serviceRequest.findUnique({
+    where: { id: requestId },
+    include: requestInclude,
+  });
+
+  if (!request) {
+    throw new ApiError(404, 'Service request not found');
+  }
+
+  const belongsToDoctor =
+    request.assignedDoctorId === doctorProfile.id || request.requestedDoctorId === doctorProfile.id;
+
+  if (!belongsToDoctor) {
+    throw new ApiError(403, 'This service request does not belong to the doctor');
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.serviceRequest.update({
+      where: { id: requestId },
+      data: {
+        assignedDoctorId: doctorProfile.id,
+        status: ServiceRequestStatus.ACCEPTED,
+      },
+    });
+
+    if (request.appointment) {
+      await tx.appointment.update({
+        where: { id: request.appointment.id },
+        data: {
+          doctorId: doctorProfile.id,
+          status: AppointmentStatus.CONFIRMED,
+        },
+      });
+    }
+
+    return tx.serviceRequest.findUnique({
+      where: { id: requestId },
+      include: requestInclude,
+    });
+  });
+
+  if (!updated) {
+    throw new ApiError(500, 'Service request acceptance could not be finalized');
+  }
+
+  await createNotifications([
+    {
+      userId: updated.patientProfile.userId,
+      type: updated.appointment ? NotificationType.APPOINTMENT_CONFIRMED : NotificationType.REQUEST_ASSIGNED,
+      title: updated.appointment ? 'Appointment confirmed' : 'Doctor accepted your request',
+      body: updated.appointment
+        ? `${updated.assignedDoctor?.user.fullName ?? 'A doctor'} confirmed your visit.`
+        : `${updated.assignedDoctor?.user.fullName ?? 'A doctor'} accepted the visit request.`,
+      data: { requestId: updated.id, appointmentId: updated.appointment?.id, doctorId: updated.assignedDoctorId },
+    },
+  ]);
+
+  return mapRequest(updated);
+};
+
+export const rejectServiceRequest = async (
+  userId: string,
+  requestId: string,
+  reason?: string
+) => {
+  const doctorProfile = await prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctorProfile) {
+    throw new ApiError(404, 'Doctor profile not found');
+  }
+
+  const request = await prisma.serviceRequest.findUnique({
+    where: { id: requestId },
+    include: requestInclude,
+  });
+
+  if (!request) {
+    throw new ApiError(404, 'Service request not found');
+  }
+
+  const belongsToDoctor =
+    request.assignedDoctorId === doctorProfile.id || request.requestedDoctorId === doctorProfile.id;
+
+  if (!belongsToDoctor) {
+    throw new ApiError(403, 'This service request does not belong to the doctor');
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (request.appointment) {
+      await releaseRejectedAppointmentAllocation(tx, request.appointment.id, request.appointment.slotId);
+      await tx.appointment.update({
+        where: { id: request.appointment.id },
+        data: {
+          status: AppointmentStatus.PENDING,
+          slotId: null,
+        },
+      });
+    }
+
+    await tx.serviceRequest.update({
+      where: { id: requestId },
+      data: {
+        assignedDoctorId: null,
+        status: ServiceRequestStatus.MATCHING,
+        notes: reason ? `${request.notes ? `${request.notes}\n` : ''}Doctor rejection: ${reason}` : request.notes,
+      },
+    });
+
+    return tx.serviceRequest.findUnique({
+      where: { id: requestId },
+      include: requestInclude,
+    });
+  });
+
+  if (!updated) {
+    throw new ApiError(500, 'Service request rejection could not be finalized');
+  }
+
+  const admins = await selectAdminRecipients();
+  await createNotifications([
+    ...admins.map((admin) => ({
+      userId: admin.id,
+      type: NotificationType.ADMIN_ALERT,
+      title: 'Doctor rejected request',
+      body: `${request.requestedDoctor?.user.fullName ?? request.assignedDoctor?.user.fullName ?? 'Doctor'} rejected a patient request and it needs admin finalization.`,
+      data: { requestId: updated.id, appointmentId: updated.appointment?.id, reason },
+    })),
+    {
+      userId: updated.patientProfile.userId,
+      type: NotificationType.GENERAL,
+      title: 'Booking sent to admin review',
+      body: 'The doctor could not take this visit. Admin will review and finalize the booking.',
+      data: { requestId: updated.id, appointmentId: updated.appointment?.id },
+    },
+  ]);
+
+  return mapRequest(updated);
+};
+
 export const assignDoctorToRequest = async (requestId: string, doctorId: string) => {
   const [doctor, request] = await Promise.all([
     prisma.doctorProfile.findUnique({
@@ -403,20 +588,40 @@ export const assignDoctorToRequest = async (requestId: string, doctorId: string)
     }
   );
 
-  const updated = await prisma.serviceRequest.update({
-    where: { id: requestId },
-    data: {
-      assignedDoctorId: doctor.id,
-      requestedDoctorId: request.requestedDoctorId ?? doctor.id,
-      status: ServiceRequestStatus.ASSIGNED,
-      distanceKm: toDecimalInput(distanceKm),
-      isWithinDoctorRange:
-        distanceKm === null
-          ? doctor.location?.city?.toLowerCase() === request.city.toLowerCase()
-          : isWithinRadiusKm(distanceKm, doctor.serviceRadiusKm),
-    },
-    include: requestInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.serviceRequest.update({
+      where: { id: requestId },
+      data: {
+        assignedDoctorId: doctor.id,
+        requestedDoctorId: request.requestedDoctorId ?? doctor.id,
+        status: ServiceRequestStatus.ASSIGNED,
+        distanceKm: toDecimalInput(distanceKm),
+        isWithinDoctorRange:
+          distanceKm === null
+            ? doctor.location?.city?.toLowerCase() === request.city.toLowerCase()
+            : isWithinRadiusKm(distanceKm, doctor.serviceRadiusKm),
+      },
+    });
+
+    if (request.appointment) {
+      await tx.appointment.update({
+        where: { id: request.appointment.id },
+        data: {
+          doctorId: doctor.id,
+          status: AppointmentStatus.PENDING,
+        },
+      });
+    }
+
+    return tx.serviceRequest.findUnique({
+      where: { id: requestId },
+      include: requestInclude,
+    });
   });
+
+  if (!updated) {
+    throw new ApiError(500, 'Doctor assignment could not be finalized');
+  }
 
   await createNotifications([
     {
@@ -424,7 +629,14 @@ export const assignDoctorToRequest = async (requestId: string, doctorId: string)
       type: NotificationType.REQUEST_ASSIGNED,
       title: 'Request assigned',
       body: `${updated.patientProfile.user.fullName} was assigned to you.`,
-      data: { requestId: updated.id },
+      data: { requestId: updated.id, appointmentId: updated.appointment?.id },
+    },
+    {
+      userId: updated.patientProfile.userId,
+      type: NotificationType.GENERAL,
+      title: 'Admin reassigned your booking',
+      body: `${doctor.user.fullName} was assigned to review and confirm your visit.`,
+      data: { requestId: updated.id, appointmentId: updated.appointment?.id, doctorId: doctor.id },
     },
   ]);
 

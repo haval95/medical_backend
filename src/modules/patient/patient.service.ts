@@ -58,6 +58,22 @@ const serializeConsent = (
   source: consent.source,
 });
 
+const serializeAddress = (
+  address: Prisma.PatientAddressGetPayload<Record<string, never>>
+) => ({
+  id: address.id,
+  label: address.label,
+  fullAddress: address.fullAddress,
+  city: address.city,
+  latitude: decimalToNumber(address.latitude),
+  longitude: decimalToNumber(address.longitude),
+  phoneNumber: address.phoneNumber,
+  notes: address.notes,
+  isDefault: address.isDefault,
+  createdAt: address.createdAt,
+  updatedAt: address.updatedAt,
+});
+
 const syncPatientConsents = async (
   tx: PrismaExecutor,
   patientProfileId: string,
@@ -156,6 +172,91 @@ const buildPatientProfileUpdate = (input: {
   notes: input.notes,
 });
 
+const syncPatientDefaultAddress = async (
+  tx: PrismaExecutor,
+  patientProfileId: string,
+  input: {
+    label: string;
+    fullAddress: string;
+    city: string;
+    latitude?: number;
+    longitude?: number;
+    phoneNumber: string;
+    notes?: string;
+    isDefault?: boolean;
+  }
+) => {
+  const existingDefault = await tx.patientAddress.findFirst({
+    where: {
+      patientProfileId,
+      isDefault: true,
+    },
+    orderBy: {
+      createdAt: 'asc',
+    },
+  });
+
+  if (existingDefault) {
+    return tx.patientAddress.update({
+      where: { id: existingDefault.id },
+      data: {
+        label: input.label,
+        fullAddress: input.fullAddress,
+        city: input.city,
+        latitude: toDecimalInput(input.latitude),
+        longitude: toDecimalInput(input.longitude),
+        phoneNumber: normalizePhoneNumber(input.phoneNumber),
+        notes: input.notes,
+        isDefault: true,
+      },
+    });
+  }
+
+  return tx.patientAddress.create({
+    data: {
+      patientProfileId,
+      label: input.label,
+      fullAddress: input.fullAddress,
+      city: input.city,
+      latitude: toDecimalInput(input.latitude),
+      longitude: toDecimalInput(input.longitude),
+      phoneNumber: normalizePhoneNumber(input.phoneNumber),
+      notes: input.notes,
+      isDefault: input.isDefault ?? true,
+    },
+  });
+};
+
+const ensurePatientAddressBootstrap = async (tx: PrismaExecutor, profile: {
+  id: string;
+  user: { phoneNumber: string };
+  city?: string | null;
+  homeAddress?: string | null;
+  latitude?: Prisma.Decimal | null;
+  longitude?: Prisma.Decimal | null;
+}) => {
+  const addressCount = await tx.patientAddress.count({
+    where: { patientProfileId: profile.id },
+  });
+
+  if (addressCount > 0 || !profile.homeAddress || !profile.city) {
+    return;
+  }
+
+  await tx.patientAddress.create({
+    data: {
+      patientProfileId: profile.id,
+      label: 'Home',
+      fullAddress: profile.homeAddress,
+      city: profile.city,
+      latitude: profile.latitude,
+      longitude: profile.longitude,
+      phoneNumber: profile.user.phoneNumber,
+      isDefault: true,
+    },
+  });
+};
+
 const formatPatientSummary = (
   profile: Prisma.PatientProfileGetPayload<{ include: typeof patientSummaryInclude }>
 ) => ({
@@ -239,6 +340,17 @@ export const createPatientFromRegistration = async (input: PatientRegistrationIn
     });
 
     await syncPatientConsents(tx, patientProfile.id, input.consents);
+    if (input.homeAddress && input.city) {
+      await syncPatientDefaultAddress(tx, patientProfile.id, {
+        label: 'Home',
+        fullAddress: input.homeAddress,
+        city: input.city,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        phoneNumber: user.phoneNumber,
+        isDefault: true,
+      });
+    }
 
     if (referredDoctor) {
       const referralEvent = await tx.referralEvent.create({
@@ -318,6 +430,9 @@ export const getPatientProfileByUserId = async (userId: string) => {
 
 export const getMyPatientSummary = async (userId: string) => {
   const profile = await getPatientProfileByUserId(userId);
+  await prisma.$transaction(async (tx) => {
+    await ensurePatientAddressBootstrap(tx, profile);
+  });
   const [activeRequests, upcomingAppointments, recentRequests] = await Promise.all([
     prisma.serviceRequest.count({
       where: {
@@ -500,8 +615,225 @@ export const updateMyPatientProfile = async (
     });
 
     await syncPatientConsents(tx, profile.id, input.consents);
+
+    if (input.homeAddress && input.city) {
+      await syncPatientDefaultAddress(tx, profile.id, {
+        label: 'Home',
+        fullAddress: input.homeAddress,
+        city: input.city,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        phoneNumber: input.emergencyContactPhone || profile.user.phoneNumber,
+        notes: input.notes,
+        isDefault: true,
+      });
+    }
   });
 
   const refreshed = await getPatientProfileByUserId(userId);
   return formatPatientSummary(refreshed);
+};
+
+export const getMyPatientAddresses = async (userId: string) => {
+  const profile = await getPatientProfileByUserId(userId);
+
+  await prisma.$transaction(async (tx) => {
+    await ensurePatientAddressBootstrap(tx, profile);
+  });
+
+  const addresses = await prisma.patientAddress.findMany({
+    where: { patientProfileId: profile.id },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+  });
+
+  return addresses.map(serializeAddress);
+};
+
+export const createMyPatientAddress = async (
+  userId: string,
+  input: {
+    label: string;
+    fullAddress: string;
+    city: string;
+    latitude?: number;
+    longitude?: number;
+    phoneNumber: string;
+    notes?: string;
+    isDefault?: boolean;
+  }
+) => {
+  const profile = await getPatientProfileByUserId(userId);
+
+  const created = await prisma.$transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.patientAddress.updateMany({
+        where: {
+          patientProfileId: profile.id,
+          isDefault: true,
+        },
+        data: {
+          isDefault: false,
+        },
+      });
+    }
+
+    const address = await tx.patientAddress.create({
+      data: {
+        patientProfileId: profile.id,
+        label: input.label,
+        fullAddress: input.fullAddress,
+        city: input.city,
+        latitude: toDecimalInput(input.latitude),
+        longitude: toDecimalInput(input.longitude),
+        phoneNumber: normalizePhoneNumber(input.phoneNumber),
+        notes: input.notes,
+        isDefault: input.isDefault ?? false,
+      },
+    });
+
+    if (address.isDefault) {
+      await tx.patientProfile.update({
+        where: { id: profile.id },
+        data: {
+          city: address.city,
+          homeAddress: address.fullAddress,
+          latitude: address.latitude,
+          longitude: address.longitude,
+        },
+      });
+    }
+
+    return address;
+  });
+
+  return serializeAddress(created);
+};
+
+export const updateMyPatientAddress = async (
+  userId: string,
+  addressId: string,
+  input: {
+    label?: string;
+    fullAddress?: string;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+    phoneNumber?: string;
+    notes?: string;
+    isDefault?: boolean;
+  }
+) => {
+  const profile = await getPatientProfileByUserId(userId);
+  const existing = await prisma.patientAddress.findFirst({
+    where: {
+      id: addressId,
+      patientProfileId: profile.id,
+    },
+  });
+
+  if (!existing) {
+    throw new ApiError(404, 'Patient address not found');
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.patientAddress.updateMany({
+        where: {
+          patientProfileId: profile.id,
+          isDefault: true,
+        },
+        data: {
+          isDefault: false,
+        },
+      });
+    }
+
+    const address = await tx.patientAddress.update({
+      where: { id: addressId },
+      data: {
+        label: input.label,
+        fullAddress: input.fullAddress,
+        city: input.city,
+        latitude: input.latitude === undefined ? undefined : toDecimalInput(input.latitude),
+        longitude: input.longitude === undefined ? undefined : toDecimalInput(input.longitude),
+        phoneNumber: input.phoneNumber
+          ? normalizePhoneNumber(input.phoneNumber)
+          : undefined,
+        notes: input.notes,
+        isDefault: input.isDefault,
+      },
+    });
+
+    if (address.isDefault) {
+      await tx.patientProfile.update({
+        where: { id: profile.id },
+        data: {
+          city: address.city,
+          homeAddress: address.fullAddress,
+          latitude: address.latitude,
+          longitude: address.longitude,
+        },
+      });
+    }
+
+    return address;
+  });
+
+  return serializeAddress(updated);
+};
+
+export const removeMyPatientAddress = async (userId: string, addressId: string) => {
+  const profile = await getPatientProfileByUserId(userId);
+  const existing = await prisma.patientAddress.findFirst({
+    where: {
+      id: addressId,
+      patientProfileId: profile.id,
+    },
+  });
+
+  if (!existing) {
+    throw new ApiError(404, 'Patient address not found');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.patientAddress.delete({
+      where: { id: addressId },
+    });
+
+    if (!existing.isDefault) {
+      return;
+    }
+
+    const nextDefault = await tx.patientAddress.findFirst({
+      where: { patientProfileId: profile.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (nextDefault) {
+      await tx.patientAddress.update({
+        where: { id: nextDefault.id },
+        data: { isDefault: true },
+      });
+      await tx.patientProfile.update({
+        where: { id: profile.id },
+        data: {
+          city: nextDefault.city,
+          homeAddress: nextDefault.fullAddress,
+          latitude: nextDefault.latitude,
+          longitude: nextDefault.longitude,
+        },
+      });
+      return;
+    }
+
+    await tx.patientProfile.update({
+      where: { id: profile.id },
+      data: {
+        city: null,
+        homeAddress: null,
+        latitude: null,
+        longitude: null,
+      },
+    });
+  });
 };

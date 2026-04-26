@@ -7,6 +7,7 @@ import {
   completeAppointmentSchema,
   createAppointmentSchema,
   listAppointmentsSchema,
+  rescheduleAppointmentSchema,
   updateAppointmentStatusSchema,
 } from './appointment.schema.js';
 import {
@@ -14,6 +15,7 @@ import {
   createAppointment,
   listAppointments,
   requestAppointmentCancellation,
+  rescheduleAppointment,
   reviewAppointmentCancellation,
   updateAppointmentStatus,
 } from './appointment.service.js';
@@ -58,11 +60,27 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
 export const requestCancellation = asyncHandler(async (req: Request, res: Response) => {
   const payload = appointmentCancellationRequestSchema.parse(req.body);
   const data = await requestAppointmentCancellation(
-    req.user!.id,
+    {
+      userId: req.user!.id,
+      role: req.user!.role,
+    },
     req.params.appointmentId,
     payload.reason
   );
   res.json(ApiResponse.success('Appointment cancellation requested successfully', data));
+});
+
+export const reschedule = asyncHandler(async (req: Request, res: Response) => {
+  const payload = rescheduleAppointmentSchema.parse(req.body);
+  const data = await rescheduleAppointment(
+    {
+      userId: req.user!.id,
+      role: req.user!.role,
+    },
+    req.params.appointmentId,
+    payload
+  );
+  res.json(ApiResponse.success('Appointment rescheduled successfully', data));
 });
 
 export const reviewCancellation = asyncHandler(async (req: Request, res: Response) => {

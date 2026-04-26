@@ -1,7 +1,7 @@
 import { ApiResponse } from '../../utils/ApiResponse.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { appointmentCancellationDecisionSchema, appointmentCancellationRequestSchema, completeAppointmentSchema, createAppointmentSchema, listAppointmentsSchema, updateAppointmentStatusSchema, } from './appointment.schema.js';
-import { completeAppointment, createAppointment, listAppointments, requestAppointmentCancellation, reviewAppointmentCancellation, updateAppointmentStatus, } from './appointment.service.js';
+import { appointmentCancellationDecisionSchema, appointmentCancellationRequestSchema, completeAppointmentSchema, createAppointmentSchema, listAppointmentsSchema, rescheduleAppointmentSchema, updateAppointmentStatusSchema, } from './appointment.schema.js';
+import { completeAppointment, createAppointment, listAppointments, requestAppointmentCancellation, rescheduleAppointment, reviewAppointmentCancellation, updateAppointmentStatus, } from './appointment.service.js';
 export const create = asyncHandler(async (req, res) => {
     const payload = createAppointmentSchema.parse(req.body);
     const data = await createAppointment({
@@ -28,8 +28,19 @@ export const updateStatus = asyncHandler(async (req, res) => {
 });
 export const requestCancellation = asyncHandler(async (req, res) => {
     const payload = appointmentCancellationRequestSchema.parse(req.body);
-    const data = await requestAppointmentCancellation(req.user.id, req.params.appointmentId, payload.reason);
+    const data = await requestAppointmentCancellation({
+        userId: req.user.id,
+        role: req.user.role,
+    }, req.params.appointmentId, payload.reason);
     res.json(ApiResponse.success('Appointment cancellation requested successfully', data));
+});
+export const reschedule = asyncHandler(async (req, res) => {
+    const payload = rescheduleAppointmentSchema.parse(req.body);
+    const data = await rescheduleAppointment({
+        userId: req.user.id,
+        role: req.user.role,
+    }, req.params.appointmentId, payload);
+    res.json(ApiResponse.success('Appointment rescheduled successfully', data));
 });
 export const reviewCancellation = asyncHandler(async (req, res) => {
     const payload = appointmentCancellationDecisionSchema.parse(req.body);

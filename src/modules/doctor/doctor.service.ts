@@ -28,6 +28,81 @@ const visibleReviewInclude = {
   },
 } satisfies Prisma.ReviewInclude;
 
+const workingHourDays = [
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+  'SUNDAY',
+] as const;
+
+type WorkingHourDay = (typeof workingHourDays)[number];
+
+type GeneralWorkingHour = {
+  day: WorkingHourDay;
+  isActive: boolean;
+  startTime?: string;
+  endTime?: string;
+};
+
+const timePattern = /^\d{2}:\d{2}$/;
+
+const normalizeGeneralWorkingHours = (
+  value: Prisma.JsonValue | null | undefined
+): GeneralWorkingHour[] => {
+  const defaults = new Map<WorkingHourDay, GeneralWorkingHour>(
+    workingHourDays.map((day) => [day, { day, isActive: false }])
+  );
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        continue;
+      }
+
+      const candidate = entry as Record<string, unknown>;
+      const day = candidate.day;
+
+      if (typeof day !== 'string' || !workingHourDays.includes(day as WorkingHourDay)) {
+        continue;
+      }
+
+      const startTime =
+        typeof candidate.startTime === 'string' && timePattern.test(candidate.startTime)
+          ? candidate.startTime
+          : undefined;
+      const endTime =
+        typeof candidate.endTime === 'string' && timePattern.test(candidate.endTime)
+          ? candidate.endTime
+          : undefined;
+      const isActive = Boolean(candidate.isActive) && Boolean(startTime && endTime);
+
+      defaults.set(day as WorkingHourDay, {
+        day: day as WorkingHourDay,
+        isActive,
+        startTime: isActive ? startTime : undefined,
+        endTime: isActive ? endTime : undefined,
+      });
+    }
+  }
+
+  return workingHourDays.map((day) => defaults.get(day)!);
+};
+
+const serializeGeneralWorkingHours = (
+  value?: GeneralWorkingHour[]
+): Prisma.InputJsonValue | undefined =>
+  value
+    ? value.map((entry) => ({
+        day: entry.day,
+        isActive: entry.isActive,
+        startTime: entry.isActive ? entry.startTime ?? null : null,
+        endTime: entry.isActive ? entry.endTime ?? null : null,
+      }))
+    : undefined;
+
 const serializeCredential = (
   credential: Prisma.DoctorCredentialGetPayload<Record<string, never>>
 ) => ({
@@ -42,8 +117,13 @@ const serializeCredential = (
 
 const mapDoctorCard = (
   doctor: Prisma.DoctorProfileGetPayload<{ include: typeof doctorInclude }>,
-  patientLocation?: { latitude?: number | null; longitude?: number | null }
+  patientLocation?: { latitude?: number | null; longitude?: number | null },
+  extras?: { patientCount?: number }
 ) => {
+  const consultationFee =
+    (doctor as Prisma.DoctorProfileGetPayload<{ include: typeof doctorInclude }> & {
+      consultationFee?: number | null;
+    }).consultationFee ?? 0;
   const doctorLatitude = decimalToNumber(doctor.location?.latitude);
   const doctorLongitude = decimalToNumber(doctor.location?.longitude);
   const distanceKm = calculateDistanceKm(
@@ -64,13 +144,18 @@ const mapDoctorCard = (
     bio: doctor.bio,
     languages: doctor.languages,
     yearsExperience: doctor.yearsExperience,
+    consultationFee,
     isAvailable: doctor.isAvailable,
     serviceRadiusKm: doctor.serviceRadiusKm,
     defaultSlotMinutes: doctor.defaultSlotMinutes,
     defaultBufferMinutes: doctor.defaultBufferMinutes,
+    generalWorkingHours: normalizeGeneralWorkingHours(
+      doctor.generalWorkingHours as Prisma.JsonValue | null | undefined
+    ),
     averageRating: decimalToNumber(doctor.averageRating) ?? 0,
     reviewCount: doctor.reviewCount,
     completedVisitCount: doctor.completedVisitCount,
+    patientCount: extras?.patientCount ?? 0,
     workplaceName: doctor.workplaceName,
     workplaceAddress: doctor.workplaceAddress,
     city: doctor.location?.city ?? null,
@@ -131,6 +216,23 @@ const getDoctorProfileById = async (doctorId: string) => {
   return doctor;
 };
 
+const getDoctorPatientCount = async (doctorId: string) => {
+  const patients = await prisma.appointment.findMany({
+    where: {
+      doctorId,
+      status: {
+        notIn: [AppointmentStatus.REJECTED],
+      },
+    },
+    distinct: ['patientProfileId'],
+    select: {
+      patientProfileId: true,
+    },
+  });
+
+  return patients.length;
+};
+
 const ACTIVE_APPOINTMENT_STATUSES = [
   AppointmentStatus.PENDING,
   AppointmentStatus.CONFIRMED,
@@ -150,6 +252,40 @@ const endOfScheduleDate = (value: string) => {
   result.setDate(result.getDate() + 1);
   return result;
 };
+
+const mapDoctorScheduleSlot = (
+  slot: Prisma.DoctorScheduleSlotGetPayload<{
+    include: {
+      appointment: {
+        include: {
+          patientProfile: {
+            include: {
+              user: true;
+            };
+          };
+        };
+      };
+    };
+  }>
+) => ({
+  id: slot.id,
+  startsAt: slot.startsAt,
+  endsAt: slot.endsAt,
+  status: slot.status,
+  isBuffer: slot.isBuffer,
+  blockedReason: slot.blockedReason,
+  appointment: slot.appointment
+    ? {
+        id: slot.appointment.id,
+        status: slot.appointment.status,
+        patientProfile: {
+          user: {
+            fullName: slot.appointment.patientProfile.user.fullName,
+          },
+        },
+      }
+    : null,
+});
 
 export const getDoctorProfileByUserId = async (userId: string) => {
   const doctor = await prisma.doctorProfile.findUnique({
@@ -187,7 +323,7 @@ export const getDoctorDetails = async (doctorId: string, viewerUserId?: string) 
   const patientLocation = await getPatientLocationContext(viewerUserId);
   const doctor = await getDoctorProfileById(doctorId);
 
-  const [reviews, availableSlots] = await Promise.all([
+  const [reviews, availableSlots, patientCount] = await Promise.all([
     prisma.review.findMany({
       where: {
         doctorId,
@@ -195,7 +331,7 @@ export const getDoctorDetails = async (doctorId: string, viewerUserId?: string) 
       },
       include: visibleReviewInclude,
       orderBy: { createdAt: 'desc' },
-      take: 12,
+      take: 3,
     }),
     prisma.doctorScheduleSlot.findMany({
       where: {
@@ -208,10 +344,11 @@ export const getDoctorDetails = async (doctorId: string, viewerUserId?: string) 
       orderBy: { startsAt: 'asc' },
       take: 30,
     }),
+    getDoctorPatientCount(doctorId),
   ]);
 
   return {
-    ...mapDoctorCard(doctor, patientLocation ?? undefined),
+    ...mapDoctorCard(doctor, patientLocation ?? undefined, { patientCount }),
     reviews: reviews.map(mapVisibleReview),
     nextAvailableSlots: availableSlots.map((slot) => ({
       id: slot.id,
@@ -221,6 +358,22 @@ export const getDoctorDetails = async (doctorId: string, viewerUserId?: string) 
       isBuffer: slot.isBuffer,
     })),
   };
+};
+
+export const getDoctorReviews = async (doctorId: string) => {
+  await getDoctorProfileById(doctorId);
+
+  const reviews = await prisma.review.findMany({
+    where: {
+      doctorId,
+      isHidden: false,
+    },
+    include: visibleReviewInclude,
+    orderBy: [{ createdAt: 'desc' }],
+    take: 100,
+  });
+
+  return reviews.map(mapVisibleReview);
 };
 
 export const getMyDoctorSummary = async (userId: string) => {
@@ -386,10 +539,12 @@ export const updateDoctorProfileById = async (
     specialty?: string | null;
     bio?: string | null;
     yearsExperience?: number;
+    consultationFee?: number;
     languages?: string[];
     serviceRadiusKm?: number;
     defaultSlotMinutes?: number;
     defaultBufferMinutes?: number;
+    generalWorkingHours?: GeneralWorkingHour[];
     isAvailable?: boolean;
     workplaceName?: string | null;
     workplaceAddress?: string | null;
@@ -446,10 +601,15 @@ export const updateDoctorProfileById = async (
         specialty: input.specialty === undefined ? undefined : input.specialty,
         bio: input.bio === undefined ? undefined : input.bio,
         yearsExperience: input.yearsExperience,
+        consultationFee: input.consultationFee,
         languages: input.languages,
         serviceRadiusKm: input.serviceRadiusKm,
         defaultSlotMinutes: input.defaultSlotMinutes,
         defaultBufferMinutes: input.defaultBufferMinutes,
+        generalWorkingHours:
+          input.generalWorkingHours === undefined
+            ? undefined
+            : serializeGeneralWorkingHours(input.generalWorkingHours),
         isAvailable: input.isAvailable,
         workplaceName: input.workplaceName === undefined ? undefined : input.workplaceName,
         workplaceAddress:
@@ -462,7 +622,7 @@ export const updateDoctorProfileById = async (
           input.workplaceLongitude === undefined
             ? undefined
             : toDecimalInput(input.workplaceLongitude),
-      },
+      } as Prisma.DoctorProfileUpdateInput,
     });
 
     return tx.doctorProfile.findUnique({
@@ -519,13 +679,56 @@ export const updateMyDoctorAvailability = async (
 };
 
 export const listDoctorSlots = async (doctorId: string, from?: string, to?: string) =>
-  prisma.doctorScheduleSlot.findMany({
+  prisma.doctorScheduleSlot
+    .findMany({
+      where: {
+        doctorId,
+        startsAt: from ? { gte: new Date(from) } : undefined,
+        endsAt: to ? { lte: new Date(to) } : undefined,
+      },
+      orderBy: { startsAt: 'asc' },
+      include: {
+        appointment: {
+          include: {
+            patientProfile: {
+              include: {
+                user: true,
+              },
+            },
+          },
+        },
+      },
+    })
+    .then((slots) => slots.map(mapDoctorScheduleSlot));
+
+export const createDoctorScheduleSlot = async (
+  doctorId: string,
+  input: {
+    startsAt: string;
+    endsAt: string;
+    sourceLabel?: string;
+  }
+) => {
+  const startsAt = new Date(input.startsAt);
+  const endsAt = new Date(input.endsAt);
+
+  if (startsAt >= endsAt) {
+    throw new ApiError(400, 'Slot end time must be after the start time');
+  }
+
+  const overlapping = await prisma.doctorScheduleSlot.findFirst({
     where: {
       doctorId,
-      startsAt: from ? { gte: new Date(from) } : undefined,
-      endsAt: to ? { lte: new Date(to) } : undefined,
+      startsAt: {
+        lt: endsAt,
+      },
+      endsAt: {
+        gt: startsAt,
+      },
+      status: {
+        in: [ScheduleSlotStatus.AVAILABLE, ScheduleSlotStatus.BOOKED, ScheduleSlotStatus.BLOCKED, ScheduleSlotStatus.UNAVAILABLE],
+      },
     },
-    orderBy: { startsAt: 'asc' },
     include: {
       appointment: {
         include: {
@@ -538,6 +741,168 @@ export const listDoctorSlots = async (doctorId: string, from?: string, to?: stri
       },
     },
   });
+
+  if (overlapping) {
+    throw new ApiError(400, 'This slot overlaps an existing schedule block');
+  }
+
+  const created = await prisma.doctorScheduleSlot.create({
+    data: {
+      doctorId,
+      startsAt,
+      endsAt,
+      status: ScheduleSlotStatus.AVAILABLE,
+      sourceLabel: input.sourceLabel ?? 'MANUAL_SLOT',
+    },
+    include: {
+      appointment: {
+        include: {
+          patientProfile: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return mapDoctorScheduleSlot(created);
+};
+
+export const createMyDoctorScheduleSlot = async (
+  userId: string,
+  input: Parameters<typeof createDoctorScheduleSlot>[1]
+) => {
+  const doctor = await getDoctorProfileByUserId(userId);
+  return createDoctorScheduleSlot(doctor.id, input);
+};
+
+export const updateDoctorScheduleSlot = async (
+  doctorId: string,
+  slotId: string,
+  input: {
+    startsAt?: string;
+    endsAt?: string;
+    blockedReason?: string | null;
+    status?: 'AVAILABLE' | 'UNAVAILABLE';
+  }
+) => {
+  const slot = await prisma.doctorScheduleSlot.findFirst({
+    where: {
+      id: slotId,
+      doctorId,
+    },
+    include: {
+      appointment: {
+        include: {
+          patientProfile: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!slot) {
+    throw new ApiError(404, 'Schedule slot not found');
+  }
+
+  if (slot.appointment || slot.status === ScheduleSlotStatus.BOOKED) {
+    throw new ApiError(400, 'Booked schedule slots cannot be edited');
+  }
+
+  const startsAt = input.startsAt ? new Date(input.startsAt) : slot.startsAt;
+  const endsAt = input.endsAt ? new Date(input.endsAt) : slot.endsAt;
+
+  if (startsAt >= endsAt) {
+    throw new ApiError(400, 'Slot end time must be after the start time');
+  }
+
+  const overlapping = await prisma.doctorScheduleSlot.findFirst({
+    where: {
+      doctorId,
+      id: {
+        not: slotId,
+      },
+      startsAt: {
+        lt: endsAt,
+      },
+      endsAt: {
+        gt: startsAt,
+      },
+    },
+  });
+
+  if (overlapping) {
+    throw new ApiError(400, 'This slot overlaps an existing schedule block');
+  }
+
+  const updated = await prisma.doctorScheduleSlot.update({
+    where: { id: slotId },
+    data: {
+      startsAt,
+      endsAt,
+      blockedReason: input.blockedReason === undefined ? undefined : input.blockedReason,
+      status: input.status ?? slot.status,
+      isBuffer: false,
+      bufferForAppointmentId: null,
+    },
+    include: {
+      appointment: {
+        include: {
+          patientProfile: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return mapDoctorScheduleSlot(updated);
+};
+
+export const updateMyDoctorScheduleSlot = async (
+  userId: string,
+  slotId: string,
+  input: Parameters<typeof updateDoctorScheduleSlot>[2]
+) => {
+  const doctor = await getDoctorProfileByUserId(userId);
+  return updateDoctorScheduleSlot(doctor.id, slotId, input);
+};
+
+export const deleteDoctorScheduleSlot = async (doctorId: string, slotId: string) => {
+  const slot = await prisma.doctorScheduleSlot.findFirst({
+    where: {
+      id: slotId,
+      doctorId,
+    },
+    include: {
+      appointment: true,
+    },
+  });
+
+  if (!slot) {
+    throw new ApiError(404, 'Schedule slot not found');
+  }
+
+  if (slot.appointment || slot.status === ScheduleSlotStatus.BOOKED) {
+    throw new ApiError(400, 'Booked schedule slots cannot be deleted');
+  }
+
+  await prisma.doctorScheduleSlot.delete({
+    where: { id: slotId },
+  });
+};
+
+export const deleteMyDoctorScheduleSlot = async (userId: string, slotId: string) => {
+  const doctor = await getDoctorProfileByUserId(userId);
+  return deleteDoctorScheduleSlot(doctor.id, slotId);
+};
 
 export const createScheduleTemplateForDoctor = async (
   doctorId: string,

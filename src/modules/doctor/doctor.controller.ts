@@ -3,19 +3,25 @@ import { ApiResponse } from '../../utils/ApiResponse.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import {
   createDoctorUnavailabilitySchema,
+  createDoctorScheduleSlotSchema,
   createScheduleTemplateSchema,
   listDoctorSlotsSchema,
+  updateDoctorScheduleSlotSchema,
   updateDoctorAvailabilitySchema,
   updateDoctorLocationSchema,
   updateDoctorProfileSchema,
 } from './doctor.schema.js';
 import {
+  createMyDoctorScheduleSlot,
   createMyDoctorUnavailability,
   createMyScheduleTemplate,
+  deleteMyDoctorScheduleSlot,
   getDoctorDetails,
+  getDoctorReviews,
   getMyDoctorSummary,
   listDoctorSlots,
   listDoctors,
+  updateMyDoctorScheduleSlot,
   updateMyDoctorAvailability,
   updateMyDoctorLocation,
   updateMyDoctorProfile,
@@ -32,6 +38,11 @@ export const getDoctor = asyncHandler(async (req: Request, res: Response) => {
     req.user?.role === 'PATIENT' ? req.user.id : undefined
   );
   res.json(ApiResponse.success('Doctor profile retrieved successfully', data));
+});
+
+export const getDoctorReviewList = asyncHandler(async (req: Request, res: Response) => {
+  const data = await getDoctorReviews(req.params.doctorId);
+  res.json(ApiResponse.success('Doctor reviews retrieved successfully', data));
 });
 
 export const getDoctorSlots = asyncHandler(async (req: Request, res: Response) => {
@@ -77,4 +88,21 @@ export const createUnavailability = asyncHandler(async (req: Request, res: Respo
   res
     .status(201)
     .json(ApiResponse.success('Doctor unavailability created successfully', data));
+});
+
+export const createScheduleSlot = asyncHandler(async (req: Request, res: Response) => {
+  const payload = createDoctorScheduleSlotSchema.parse(req.body);
+  const data = await createMyDoctorScheduleSlot(req.user!.id, payload);
+  res.status(201).json(ApiResponse.success('Doctor schedule slot created successfully', data));
+});
+
+export const updateScheduleSlot = asyncHandler(async (req: Request, res: Response) => {
+  const payload = updateDoctorScheduleSlotSchema.parse(req.body);
+  const data = await updateMyDoctorScheduleSlot(req.user!.id, req.params.slotId, payload);
+  res.json(ApiResponse.success('Doctor schedule slot updated successfully', data));
+});
+
+export const deleteScheduleSlot = asyncHandler(async (req: Request, res: Response) => {
+  await deleteMyDoctorScheduleSlot(req.user!.id, req.params.slotId);
+  res.json(ApiResponse.success('Doctor schedule slot deleted successfully', { id: req.params.slotId }));
 });

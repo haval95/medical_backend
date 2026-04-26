@@ -227,6 +227,17 @@ model User {
   backupOperationsInitiated BackupOperation[] @relation("BackupInitiator")
 }
 
+model OnboardingStep {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  imageUrl    String
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model DoctorProfile {
   id                  String               @id @default(cuid())
   userId              String               @unique
@@ -235,6 +246,7 @@ model DoctorProfile {
   bio                 String?
   languages           String[]
   yearsExperience     Int                  @default(0)
+  consultationFee     Int                  @default(0)
   workplaceName       String?
   workplaceAddress    String?
   workplaceLatitude   Decimal?             @db.Decimal(9, 6)
@@ -242,6 +254,7 @@ model DoctorProfile {
   serviceRadiusKm     Int                  @default(15)
   defaultSlotMinutes  Int                  @default(30)
   defaultBufferMinutes Int                 @default(30)
+  generalWorkingHours Json?
   isAvailable         Boolean              @default(true)
   onboardingPoints    Int                  @default(100)
   averageRating       Decimal              @default(0) @db.Decimal(3, 2)
@@ -325,7 +338,27 @@ model PatientProfile {
   pointsTransactions PointsTransaction[]
   patientDiscounts   PatientDiscount[]
   consents           PatientConsent[]
+  addresses          PatientAddress[]
   dataGovernanceRequests DataGovernanceRequest[] @relation("GovernanceSubject")
+}
+
+model PatientAddress {
+  id               String         @id @default(cuid())
+  patientProfileId String
+  label            String
+  fullAddress      String
+  city             String
+  latitude         Decimal?       @db.Decimal(9, 6)
+  longitude        Decimal?       @db.Decimal(9, 6)
+  phoneNumber      String
+  notes            String?
+  isDefault        Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  patientProfile   PatientProfile @relation(fields: [patientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([patientProfileId, createdAt])
+  @@index([patientProfileId, isDefault])
 }
 
 model ServiceRequest {

@@ -13,6 +13,7 @@ import {
   adminReportTableSchema,
   auditLogListSchema,
   createAccessReviewSchema,
+  createOnboardingStepSchema,
   createAdminUserSchema,
   createBackupOperationSchema,
   createDataGovernanceRequestSchema,
@@ -22,7 +23,9 @@ import {
   processDataGovernanceRequestSchema,
   processNotificationQueueSchema,
   runRetentionRuleSchema,
+  updateOnboardingStepSchema,
   uploadAdminDoctorPhotoSchema,
+  uploadOnboardingImageSchema,
   updateAdminDoctorSchema,
   updateAdminPatientSchema,
   updateAdminUserSchema,
@@ -41,6 +44,7 @@ import {
   createAdminManagedUser,
   createBackupOperation,
   createDataGovernanceRequest,
+  createOnboardingStep,
   createRetentionRule,
   createSecurityIncident,
   getAdminAppointmentById,
@@ -63,6 +67,7 @@ import {
   listAdminAppointments,
   listAdminDiscounts,
   listAdminDoctors,
+  listAdminOnboardingSteps,
   listAdminPatientDirectory,
   listAdminPatients,
   listAdminReferrals,
@@ -79,14 +84,17 @@ import {
   processAdminNotificationQueue,
   processDataGovernanceRequest,
   runRetentionRule,
+  deleteOnboardingStep,
   updateAdminDiscount,
   updateAdminDoctor,
   updateAdminManagedUser,
   updateAdminPatient,
   updateAccessReview,
   updateBackupOperation,
+  updateOnboardingStep,
   updateSecurityIncident,
   uploadAdminDoctorPhoto,
+  uploadOnboardingImage,
 } from './admin.service.js';
 import {
   createDoctorUnavailabilitySchema,
@@ -160,6 +168,34 @@ export const uploadDoctorPhoto = asyncHandler(async (req: Request, res: Response
   const payload = uploadAdminDoctorPhotoSchema.parse(req.body);
   const data = await uploadAdminDoctorPhoto(payload);
   res.status(201).json(ApiResponse.success('Doctor profile photo uploaded successfully', data));
+});
+
+export const onboardingSteps = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await listAdminOnboardingSteps();
+  res.json(ApiResponse.success('Onboarding steps retrieved successfully', data));
+});
+
+export const createOnboardingStepRecord = asyncHandler(async (req: Request, res: Response) => {
+  const payload = createOnboardingStepSchema.parse(req.body);
+  const data = await createOnboardingStep(payload);
+  res.status(201).json(ApiResponse.success('Onboarding step created successfully', data));
+});
+
+export const updateOnboardingStepRecord = asyncHandler(async (req: Request, res: Response) => {
+  const payload = updateOnboardingStepSchema.parse(req.body);
+  const data = await updateOnboardingStep(req.params.stepId, payload);
+  res.json(ApiResponse.success('Onboarding step updated successfully', data));
+});
+
+export const deleteOnboardingStepRecord = asyncHandler(async (req: Request, res: Response) => {
+  const data = await deleteOnboardingStep(req.params.stepId);
+  res.json(ApiResponse.success('Onboarding step deleted successfully', data));
+});
+
+export const uploadOnboardingImageAsset = asyncHandler(async (req: Request, res: Response) => {
+  const payload = uploadOnboardingImageSchema.parse(req.body);
+  const data = await uploadOnboardingImage(payload);
+  res.status(201).json(ApiResponse.success('Onboarding image uploaded successfully', data));
 });
 
 export const doctorSlots = asyncHandler(async (req: Request, res: Response) => {

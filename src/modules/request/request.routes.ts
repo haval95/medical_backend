@@ -25,5 +25,19 @@ router.patch(
   authorizePermissions(Permission.REQUEST_ASSIGN),
   requestController.assignDoctor
 );
+router.post(
+  '/:requestId/accept',
+  authenticate,
+  authorize(Role.DOCTOR),
+  authorizePermissions(Permission.REQUEST_UPDATE),
+  requestController.accept
+);
+router.post(
+  '/:requestId/reject',
+  authenticate,
+  authorize(Role.DOCTOR),
+  authorizePermissions(Permission.REQUEST_UPDATE),
+  requestController.reject
+);
 
 export default router;
